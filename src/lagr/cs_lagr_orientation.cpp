@@ -619,8 +619,7 @@ cs_lagr_orientation_dyn_spheroids(cs_lnum_t                p_id,
      tau_eta :    Kolmogorov timescale
   */
 
-  cs_lnum_t cell_id =  cs_lagr_particles_get_lnum_n(p_set, p_id, iprev,
-                                                    CS_LAGR_CELL_ID);
+  cs_lnum_t cell_id = p_set->attr_n_lnum(p_id, iprev, CS_LAGR_CELL_ID);
 
   cs_real_t romf = extra->cromf->val[cell_id];
 
@@ -650,18 +649,13 @@ cs_lagr_orientation_dyn_spheroids(cs_lnum_t                p_id,
   cs_real_t d_minus = sqrt(5.0/tau_eta);
 
   /* Get particle orientation*/
-  auto *orientation =
-    cs_lagr_particles_attr_get_ptr<cs_real_t>(p_set, p_id,
-                                              CS_LAGR_ORIENTATION);
+  auto *orientation = p_set->attr_real_ptr(p_id, CS_LAGR_ORIENTATION);
 
   /* Get particle quaternion*/
-  auto *quaternion =
-    cs_lagr_particles_attr_get_ptr<cs_real_t>(p_set, p_id,
-                                              CS_LAGR_QUATERNION);
+  auto *quaternion = p_set->attr_real_ptr(p_id, CS_LAGR_QUATERNION);
 
   /* Get particle shape_param*/
-  auto *radii = cs_lagr_particles_attr_get_ptr<cs_real_t>(p_set, p_id,
-                                                          CS_LAGR_RADII);
+  auto *radii = p_set->attr_real_ptr(p_id, CS_LAGR_RADII);
   cs_real_t Lambda = (cs_math_pow2(radii[2]/radii[1]) - 1.0)
                    / (cs_math_pow2(radii[2]/radii[1]) + 1.0);
 
@@ -756,12 +750,10 @@ cs_lagr_orientation_dyn_jeffery(cs_lnum_t        p_id,
      tau_eta :    Kolmogorov timescale
   */
 
-  cs_lnum_t cell_id =  cs_lagr_particles_get_lnum_n(p_set, p_id, iprev,
-                                                    CS_LAGR_CELL_ID);
+  cs_lnum_t cell_id = p_set->attr_n_lnum(p_id, iprev, CS_LAGR_CELL_ID);
 
   /* Euler parameters */
-  auto *euler = cs_lagr_particles_attr_get_ptr<cs_real_t>(p_set, p_id,
-                                                          CS_LAGR_EULER);
+  auto *euler = p_set->attr_real_ptr(p_id, CS_LAGR_EULER);
 
   cs_real_33_t trans_m;
   // Call function to transform the 4 euler parameters into a rotation
@@ -773,12 +765,10 @@ cs_lagr_orientation_dyn_jeffery(cs_lnum_t        p_id,
   cs_math_33_transform_a_to_r(gradvf[cell_id], trans_m, grad_vf_r);
 
   /* Ellipsoid radii */
-  auto *radii = cs_lagr_particles_attr_get_ptr<cs_real_t>(p_set, p_id,
-                                                          CS_LAGR_RADII);
+  auto *radii = p_set->attr_real_ptr(p_id, CS_LAGR_RADII);
 
   /* Corresponding shape parameters */
-  auto *s_p = cs_lagr_particles_attr_get_ptr<cs_real_t>(p_set, p_id,
-                                                        CS_LAGR_SHAPE_PARAM);
+  auto *s_p = p_set->attr_real_ptr(p_id, CS_LAGR_SHAPE_PARAM);
 
   /* Tau_p */
   cs_real_t taup = dt_part; //FIXME: need of small time steps !! (e-8 in dns)
@@ -806,9 +796,7 @@ cs_lagr_orientation_dyn_jeffery(cs_lnum_t        p_id,
   /* 3. Integration of the (S)DE on the Euler parameters and angular velocity
      ======================================================================== */
 
-    auto *ang_vel =
-      cs_lagr_particles_attr_get_ptr<cs_real_t>(p_set, p_id,
-                                                CS_LAGR_ANGULAR_VEL);
+  auto *ang_vel = p_set->attr_real_ptr(p_id, CS_LAGR_ANGULAR_VEL);
 
   /* Integration of the Euler parameters:
    * Equation (26) of P. H. Mortensen (2008)*/

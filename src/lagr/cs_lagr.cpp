@@ -71,7 +71,6 @@
 #include "base/cs_thermal_model.h"
 #include "turb/cs_turbulence_model.h"
 #include "pprt/cs_physical_model.h"
-#include "atmo/cs_atmo.h"
 #include "base/cs_parall.h"
 #include "base/cs_post.h"
 #include "base/cs_post_default.h"
@@ -1120,59 +1119,16 @@ cs_lagr_add_fields(void)
     f->set_key_int(k_log, 1);
   }
 
-  /* Fields used to inject the plume condensate from the aerosol activation.
-     They are filled by cs_atmo_aerosol_nuclea and used as spatial profiles
-     for the Lagrangian volume injection, so they are only meaningful when
-     the cooling tower droplet model runs inside the humid atmosphere with
-     an activation model. They used to be declared by hand as user
-     properties in the setup; created here so that activating the model is
-     enough. */
+  /* Add field used for injection of particle with Lagrangian module */
+  if (cs_glob_lagr_model->physical_model == CS_LAGR_PHYS_CTWR) {
+    f = cs_field_create("lagr_injection_profile",
+                        CS_FIELD_EXTENSIVE | CS_FIELD_PROPERTY,
+                        CS_MESH_LOCATION_CELLS,
+                        1,
+                        false);
 
-  if (   cs_glob_lagr_model->physical_model == CS_LAGR_PHYS_CTWR
-      && cs_glob_physical_model_flag[CS_ATMOSPHERIC] == CS_ATMO_HUMID
-      && cs_glob_atmo_option->nucleation_model != CS_ATMO_NUCLEATION_NONE) {
-
-    /* Number of newly activated droplets, all modes together */
-
-    if (cs_field_by_name_try("lagr_injection_profile") == nullptr) {
-      f = cs_field_create("lagr_injection_profile",
-                          CS_FIELD_EXTENSIVE | CS_FIELD_PROPERTY,
-                          CS_MESH_LOCATION_CELLS,
-                          1,
-                          false);
-
-      f->set_key_int(k_log, 1);
-      f->set_key_int(k_vis, 0);
-    }
-
-    /* Mass of activated aerosol of each log-normal mode, one field per
-       mode. Only the Abdul-Razzak parameterization resolves the modes. */
-
-    if (cs_glob_atmo_option->nucleation_model == CS_ATMO_NUCLEATION_ABDUL_RAZZAK) {
-
-      const int n_modes = cs_glob_atmo_option->n_aerosol_modes;
-
-      for (int mode_id = 1; mode_id <= n_modes; mode_id++) {
-
-        char f_name[64];
-        snprintf(f_name, 63, "lagr_injection_profile_%1d", mode_id);
-        f_name[63] = '\0';
-
-        if (cs_field_by_name_try(f_name) != nullptr)
-          continue;
-
-        f = cs_field_create(f_name,
-                            CS_FIELD_EXTENSIVE | CS_FIELD_PROPERTY,
-                            CS_MESH_LOCATION_CELLS,
-                            1,
-                            false);
-
-        f->set_key_int(k_log, 1);
-        f->set_key_int(k_vis, 0);
-      }
-
-    }
-
+    f->set_key_int(k_log, 1);
+    f->set_key_int(k_vis, 0);
   }
 }
 
@@ -1689,6 +1645,168 @@ cs_get_lagr_extra_module(void)
   return _lagr_extra_module;
 }
 
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Build a POD carrier view with device-accessible raw pointers from
+ *        the extra module structure for a specific continuous phase and time.
+ *
+ * \param[in]  extra     pointer to extra module structure (or array)
+ * \param[in]  phase_id  continuous phase id (default: 0)
+ * \param[in]  time_id   time index (0: current, 1: previous, default: 0)
+ *
+ * \return carrier view POD structure
+ */
+/*----------------------------------------------------------------------------*/
+
+cs_lagr_carrier_view_t
+cs_lagr_get_carrier_view(const cs_lagr_extra_module_t *extra,
+                         int                           phase_id,
+                         int                           time_id)
+{
+  cs_lagr_carrier_view_t view;
+
+  if (extra == nullptr || cs_glob_mesh == nullptr)
+    return view;
+
+  const cs_lnum_t n_cells = cs_glob_mesh->n_cells;
+  const cs_lnum_t n_b_faces = cs_glob_mesh->n_b_faces;
+  const cs_lagr_extra_module_t *p_extra = &extra[phase_id];
+
+  int t_id = 0;
+  if (p_extra->vel != nullptr)
+    t_id = cs::min(time_id, p_extra->vel->n_time_vals - 1);
+
+  if (p_extra->vel != nullptr && p_extra->vel->vals[t_id] != nullptr)
+    view.vel = cs_span_2d<cs_real_t>(p_extra->vel->vals[t_id], n_cells, 3);
+
+  if (p_extra->pressure != nullptr && p_extra->pressure->val != nullptr)
+    view.pressure = cs_span<cs_real_t>(p_extra->pressure->val, n_cells);
+
+  if (p_extra->cromf != nullptr && p_extra->cromf->val != nullptr)
+    view.rho_f = cs_span<cs_real_t>(p_extra->cromf->val, n_cells);
+  view.rho0 = (cs_glob_fluid_properties != nullptr)
+            ? cs_glob_fluid_properties->ro0 : 1.0;
+
+  if (p_extra->viscl != nullptr && p_extra->viscl->val != nullptr)
+    view.mu_l = cs_span<cs_real_t>(p_extra->viscl->val, n_cells);
+  view.mu0 = (cs_glob_fluid_properties != nullptr)
+           ? cs_glob_fluid_properties->viscl0 : 1.0e-3;
+
+  if (p_extra->cpro_cp != nullptr && p_extra->cpro_cp->val != nullptr)
+    view.cp = cs_span<cs_real_t>(p_extra->cpro_cp->val, n_cells);
+  view.cp0 = (cs_glob_fluid_properties != nullptr)
+           ? cs_glob_fluid_properties->cp0 : 0.0;
+
+  if (p_extra->temperature != nullptr && p_extra->temperature->val != nullptr)
+    view.temperature = cs_span<cs_real_t>(p_extra->temperature->val, n_cells);
+
+  if (   p_extra->temperature_variance != nullptr
+      && p_extra->temperature_variance->val != nullptr)
+    view.temp_var
+      = cs_span<cs_real_t>(p_extra->temperature_variance->val, n_cells);
+
+  if (   p_extra->temperature_turbulent_flux != nullptr
+      && p_extra->temperature_turbulent_flux->val != nullptr)
+    view.temp_turb_flux
+      = cs_span_2d<cs_real_t>(p_extra->temperature_turbulent_flux->val,
+                              n_cells, 3);
+
+  if (p_extra->cpro_viscls != nullptr && p_extra->cpro_viscls->val != nullptr)
+    view.lambda_f = cs_span<cs_real_t>(p_extra->cpro_viscls->val, n_cells);
+  view.lambda0 = p_extra->visls0;
+
+  if (p_extra->cvar_k != nullptr && p_extra->cvar_k->val != nullptr)
+    view.k = cs_span<cs_real_t>(p_extra->cvar_k->val, n_cells);
+
+  if (p_extra->cvar_ep != nullptr && p_extra->cvar_ep->val != nullptr)
+    view.ep = cs_span<cs_real_t>(p_extra->cvar_ep->val, n_cells);
+
+  if (p_extra->cvar_omg != nullptr && p_extra->cvar_omg->val != nullptr)
+    view.omg = cs_span<cs_real_t>(p_extra->cvar_omg->val, n_cells);
+
+  if (p_extra->cvar_rij != nullptr && p_extra->cvar_rij->val != nullptr)
+    view.rij = cs_span_2d<cs_real_t>(p_extra->cvar_rij->val, n_cells, 6);
+
+  if (p_extra->cvar_gradk != nullptr && p_extra->cvar_gradk->val != nullptr)
+    view.grad_k
+      = cs_span_2d<cs_real_t>(p_extra->cvar_gradk->val, n_cells, 3);
+
+  if (p_extra->grad_pr != nullptr)
+    view.grad_p
+      = cs_span_2d<cs_real_t>((cs_real_t *)p_extra->grad_pr, n_cells, 3);
+
+  if (p_extra->grad_vel != nullptr)
+    view.grad_vel
+      = cs_span_3d<cs_real_t>((cs_real_t *)p_extra->grad_vel, n_cells, 3, 3);
+
+  if (p_extra->grad_tempf != nullptr)
+    view.grad_temp_f
+      = cs_span_2d<cs_real_t>((cs_real_t *)p_extra->grad_tempf, n_cells, 3);
+
+  if (p_extra->ustar != nullptr && p_extra->ustar->val != nullptr)
+    view.ustar = cs_span<cs_real_t>(p_extra->ustar->val, n_b_faces);
+
+  if (p_extra->tstar != nullptr && p_extra->tstar->val != nullptr)
+    view.tstar = cs_span<cs_real_t>(p_extra->tstar->val, n_b_faces);
+
+  if (p_extra->alpha != nullptr && p_extra->alpha->val != nullptr)
+    view.alpha = cs_span<cs_real_t>(p_extra->alpha->val, n_cells);
+
+  view.vel_min[0] = p_extra->vel_min[0];
+  view.vel_min[1] = p_extra->vel_min[1];
+  view.vel_min[2] = p_extra->vel_min[2];
+  view.vel_max[0] = p_extra->vel_max[0];
+  view.vel_max[1] = p_extra->vel_max[1];
+  view.vel_max[2] = p_extra->vel_max[2];
+
+  if (p_extra->cell_vel_min != nullptr)
+    view.cell_vel_min
+      = cs_span_2d<cs_real_t>((cs_real_t *)p_extra->cell_vel_min, n_cells, 3);
+
+  if (p_extra->cell_vel_max != nullptr)
+    view.cell_vel_max
+      = cs_span_2d<cs_real_t>((cs_real_t *)p_extra->cell_vel_max, n_cells, 3);
+
+  view.phase_id = phase_id;
+  view.time_id = time_id;
+
+  view.cp0 = (cs_glob_fluid_properties != nullptr)
+           ? cs_glob_fluid_properties->cp0 : 0.0;
+  view.turb_model = p_extra->turb_model;
+  view.n_phases = p_extra->n_phases;
+  view.radiative_model = p_extra->radiative_model;
+
+  return view;
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Build a POD carrier bundle view containing all continuous phases.
+ *
+ * \param[in]  extra     pointer to extra module array
+ * \param[in]  time_id   time index (0: current, 1: previous, default: 0)
+ *
+ * \return carrier bundle view POD structure
+ */
+/*----------------------------------------------------------------------------*/
+
+cs_lagr_carrier_bundle_view_t
+cs_lagr_get_carrier_bundle_view(const cs_lagr_extra_module_t *extra,
+                                int                           time_id)
+{
+  cs_lagr_carrier_bundle_view_t bundle;
+
+  if (extra == nullptr)
+    return bundle;
+
+  bundle.n_phases = cs::min(extra->n_phases, CS_LAGR_MAX_CARRIER_PHASES);
+
+  for (int p = 0; p < bundle.n_phases; p++)
+    bundle.phase[p] = cs_lagr_get_carrier_view(extra, p, time_id);
+
+  return bundle;
+}
+
 /*----------------------------------------------------------------------------
  * Prepare for execution of the Lagrangian model.
  *
@@ -1793,8 +1911,14 @@ cs_lagr_solve_time_step(const int         itypfb[],
   static cs_real_t *vislen = nullptr;
   if ((lagr_model->deposition == 1) && (ipass == 1)) {
     CS_MALLOC_HD(vislen, n_b_faces, cs_real_t, cs_alloc_mode);
-    for (cs_lnum_t ifac = 0; ifac < n_b_faces; ifac++)
-      vislen[ifac] = -cs_math_big_r;
+    /* Local copies for the device lambda (vislen is a static variable,
+       cs_math_big_r a global). */
+    cs_real_t *vislen_l = vislen;
+    const cs_real_t big_r = cs_math_big_r;
+    ctx.parallel_for(n_b_faces, [=] CS_F_HOST_DEVICE (cs_lnum_t ifac) {
+      vislen_l[ifac] = -big_r;
+    });
+    ctx.wait();
   }
 
   /* mask for for deposition-related states */
@@ -1937,18 +2061,27 @@ cs_lagr_solve_time_step(const int         itypfb[],
       || lagr_model->roughness == 1
       || lagr_model->clogging == 1) {
 
+    /* Local copies for the device lambdas (host struct/globals). */
+    const cs_lnum_t n_cells = mesh->n_cells;
+    const cs_real_t c_to_k = cs_physical_constants_celsius_to_kelvin;
+    const cs_real_t t0 = cs_glob_fluid_properties->t0;
+
     if (extra->temperature != nullptr) {
+
+      const cs_real_t *temp_val = extra->temperature->val;
 
       if (   cs_glob_thermal_model->temperature_scale
           == CS_TEMPERATURE_SCALE_CELSIUS) {
-        for (cs_lnum_t iel = 0; iel < mesh->n_cells; iel++) {
-          tempp[iel] =    extra->temperature->val[iel]
-                        + cs_physical_constants_celsius_to_kelvin;
-        }
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t iel) {
+          tempp[iel] = temp_val[iel] + c_to_k;
+        });
+        ctx.wait();
       }
       else {
-        for (cs_lnum_t iel = 0; iel < mesh->n_cells; iel++)
-          tempp[iel] =    extra->temperature->val[iel];
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t iel) {
+          tempp[iel] = temp_val[iel];
+        });
+        ctx.wait();
       }
 
     }
@@ -1956,14 +2089,16 @@ cs_lagr_solve_time_step(const int         itypfb[],
     else {
       if (   cs_glob_thermal_model->temperature_scale
           == CS_TEMPERATURE_SCALE_CELSIUS) {
-        for (cs_lnum_t iel = 0; iel < mesh->n_cells; iel++) {
-          tempp[iel] =    cs_glob_fluid_properties->t0
-                        + cs_physical_constants_celsius_to_kelvin;
-        }
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t iel) {
+          tempp[iel] = t0 + c_to_k;
+        });
+        ctx.wait();
       }
       else {
-        for (cs_lnum_t iel = 0; iel < mesh->n_cells; iel++)
-          tempp[iel] = cs_glob_fluid_properties->t0;
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t iel) {
+          tempp[iel] = t0;
+        });
+        ctx.wait();
       }
     }
 
@@ -2322,7 +2457,7 @@ cs_lagr_solve_time_step(const int         itypfb[],
     /* Current to previous but not on new particles at the first time
      * because the user may have changed their position */
     for (cs_lnum_t ip = 0; ip < n_particles_prev; ip++)
-      cs_lagr_particles_current_to_previous(p_set, ip);
+      p_set.current_to_previous(ip);
 
     n_particles_prev = p_set.n_particles;
 
@@ -2484,12 +2619,9 @@ cs_lagr_solve_time_step(const int         itypfb[],
       lag_bdi->tstatp = 0.0;
       lag_bdi->npstf  = 0;
 
-      for (int s_id = 0; s_id < cs_glob_lagr_dim->n_boundary_stats; s_id++) {
-
-        for (cs_lnum_t face_id = 0; face_id < n_b_faces; face_id++)
-          bound_stat[s_id * n_b_faces + face_id] = 0.0;
-
-      }
+      cs_array_real_fill_zero(  cs_glob_lagr_dim->n_boundary_stats
+                              * n_b_faces,
+                              bound_stat);
 
     }
 
@@ -2509,15 +2641,8 @@ cs_lagr_solve_time_step(const int         itypfb[],
       cs_lagr_resuspension_init_deposited();
 
 
-    /* Open the per-cell water vapour budget shared by the cooling tower
-       droplets, so that condensation over the time step cannot draw more
-       water than each cell actually holds as vapour. */
-    cs_lagr_sde_model_vapour_budget_init();
-
     cs_lnum_t particle_range[2] = {0, p_set.n_particles};
     cs_lagr_integ_track_particles(vislen, particle_range, true);
-
-    cs_lagr_sde_model_vapour_budget_finalize();
 
     if (cs_glob_lagr_time_scheme->iilagr == CS_LAGR_TWOWAY_COUPLING)
       cs_lagr_coupling_finalize();
@@ -2526,12 +2651,8 @@ cs_lagr_solve_time_step(const int         itypfb[],
 
     for (cs_lnum_t npt = 0; npt < p_set.n_particles; npt++) {
 
-      if (p_set.attr_lnum(npt, CS_LAGR_CELL_ID) >= 0) {
-        cs_real_t res_time
-          = p_set.attr_real(npt, CS_LAGR_RESIDENCE_TIME)
-            + cs_glob_lagr_time_step->dtp;
-        p_set.attr_real(npt, CS_LAGR_RESIDENCE_TIME) = res_time;
-      }
+      if (p_set.cell_id(npt) >= 0)
+        p_set.residence_time(npt) += cs_glob_lagr_time_step->dtp;
 
     }
 
@@ -2588,11 +2709,19 @@ cs_lagr_solve_time_step(const int         itypfb[],
 
       /* Height and time of deposit     */
 
-      for (cs_lnum_t face_id = 0; face_id < n_b_faces; face_id++) {
-        bound_stat[lag_bdi->iclogt * n_b_faces + face_id] = 0.0;
-        bound_stat[lag_bdi->iclogh * n_b_faces + face_id] = 0.0;
-        bound_stat[lag_bdi->ihdiam * n_b_faces + face_id] = 0.0;
-      }
+      /* Local copies for the device lambda (lag_bdi is a host struct,
+         bound_stat a file-scope global). */
+      const int iclogt = lag_bdi->iclogt;
+      const int iclogh = lag_bdi->iclogh;
+      const int ihdiam = lag_bdi->ihdiam;
+      cs_real_t *bound_stat_l = bound_stat;
+
+      ctx.parallel_for(n_b_faces, [=] CS_F_HOST_DEVICE (cs_lnum_t face_id) {
+        bound_stat_l[iclogt * n_b_faces + face_id] = 0.0;
+        bound_stat_l[iclogh * n_b_faces + face_id] = 0.0;
+        bound_stat_l[ihdiam * n_b_faces + face_id] = 0.0;
+      });
+      ctx.wait();
 
       for (cs_lnum_t npt = 0; npt < p_set.n_particles; npt++) {
 

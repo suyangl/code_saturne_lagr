@@ -282,10 +282,7 @@ cs_lagr_particle_dump(const cs_lagr_particle_set_t  *p_set,
         case CS_LNUM_TYPE:
           {
             const cs_lnum_t *v
-              = cs_lagr_particles_attr_n_get_const_ptr<cs_lnum_t>(p_set,
-                                                                  p_id,
-                                                                  time_id,
-                                                                  attr);
+              = p_set->attr_n_lnum_const_ptr(p_id, time_id, attr);
             bft_printf("      %24s: %10ld\n", attr_name, (long)v[0]);
             for (int i = 1; i < am->count[time_id][attr]; i++)
               bft_printf("      %24s: %10ld\n", " ", (long)v[i]);
@@ -294,10 +291,7 @@ cs_lagr_particle_dump(const cs_lagr_particle_set_t  *p_set,
         case CS_GNUM_TYPE:
           {
             const cs_gnum_t *v
-              = cs_lagr_particles_attr_n_get_const_ptr<cs_gnum_t>(p_set,
-                                                                  p_id,
-                                                                  time_id,
-                                                                  attr);
+              = p_set->attr_n_gnum_const_ptr(p_id, time_id, attr);
             bft_printf("      %24s: %10lu\n", attr_name, (unsigned long)v[0]);
             for (int i = 1; i < am->count[time_id][attr]; i++)
               bft_printf("      %24s: %10lu\n", " ", (unsigned long)v[i]);
@@ -306,10 +300,7 @@ cs_lagr_particle_dump(const cs_lagr_particle_set_t  *p_set,
         case CS_REAL_TYPE:
           {
             const cs_real_t *v
-              = cs_lagr_particles_attr_n_get_const_ptr<cs_real_t>(p_set,
-                                                                  p_id,
-                                                                  time_id,
-                                                                  attr);
+              = p_set->attr_n_real_const_ptr(p_id, time_id, attr);
             bft_printf("      %24s: %10.3g\n", attr_name, v[0]);
             for (int i = 1; i < am->count[time_id][attr]; i++)
               bft_printf("      %24s: %10.3g\n", " ", v[i]);
@@ -724,8 +715,7 @@ cs_lagr_part_copy(cs_lnum_t  dest,
          p_set->p_am->extents);
   cs_real_t random = -1;
   cs_random_uniform(1, &random);
-  cs_lagr_particles_set_real(p_set, dest, CS_LAGR_RANDOM_VALUE,
-                             random);
+  p_set->attr_real(dest, CS_LAGR_RANDOM_VALUE) = random;
 }
 
 /*----------------------------------------------------------------------------*/
@@ -946,20 +936,7 @@ void
 cs_lagr_particles_current_to_previous(cs_lagr_particle_set_t  &p_set,
                                       cs_lnum_t                p_id)
 {
-  const cs_lagr_attribute_map_t  *p_am = p_set.p_am;
-  unsigned char *p_buf = p_set.p_buffer + p_am->extents*(p_id);
-
-  for (int i_attr = 0;
-       i_attr < CS_LAGR_N_ATTRIBUTES;
-       i_attr++) {
-    auto attr = static_cast<cs_lagr_attribute_t>(i_attr);
-    if (p_am->count[1][attr] > 0 && p_am->count[0][attr] > 0) {
-      memcpy(p_buf + p_am->displ[1][attr],
-             p_buf + p_am->displ[0][attr],
-             p_am->size[attr]);
-    }
-  }
-  *((cs_lnum_t *)(p_buf + p_am->displ[1][CS_LAGR_RANK_ID])) = cs_glob_rank_id;
+  p_set.current_to_previous(p_id);
 }
 
 /*----------------------------------------------------------------------------*/

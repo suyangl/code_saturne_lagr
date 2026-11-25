@@ -2495,7 +2495,7 @@ _local_propagation(cs_lagr_particle_set_t         &p_set,
           prev_location[i] = particle_coord[i];
         p_info->tracking_step_id = CS_LAGR_TRACK_STEP_VIRTUAL_PARTNER;
         /* Update previous state */
-        cs_lagr_particles_current_to_previous(p_set, p_id);
+        p_set.current_to_previous(p_id);
       }
       else if (p_info->tracking_step_id == CS_LAGR_TRACK_STEP_STOCHASTIC_FINAL) {
         /* stochastic particle final location reached */
@@ -2732,8 +2732,6 @@ _local_propagation(cs_lagr_particle_set_t         &p_set,
          ------------------      boundary condition
          K
       */
-      assert(!isnan(p_set.attr_real(p_id, CS_LAGR_MASS)));
-
       particle_state
         = _internal_treatment(p_set,
                               p_id,
@@ -2819,8 +2817,6 @@ _local_propagation(cs_lagr_particle_set_t         &p_set,
 
       cs_lnum_t face_id = exit_face - mesh->n_i_faces;
 
-      assert(!isnan(p_set.attr_real(p_id, CS_LAGR_MASS)));
-
       particle_state
         = _boundary_treatment(p_set,
                               events,
@@ -2858,7 +2854,7 @@ _local_propagation(cs_lagr_particle_set_t         &p_set,
         sum_t_intersect = 0.;
         dt_incremented_in_subiter = 0.;
         /* Update previous state */
-        cs_lagr_particles_current_to_previous(p_set, p_id);
+        p_set.current_to_previous(p_id);
 
         if (p_set.attr_real(p_id, CS_LAGR_REMAINING_INTEG_TIME) <= 0.) {
           particle_state = CS_LAGR_PART_TREATED;
@@ -2898,7 +2894,6 @@ _local_propagation(cs_lagr_particle_set_t         &p_set,
         /* if no rebound nor leaving, nor deposition nor oscillation around a
          * given face.
          * Integrate of the stochastic particle over estimated residence time */
-        assert(!isnan(p_set.attr_real(p_id, CS_LAGR_MASS)));
 
         _integ_particle_quantities(p_set,
                                    p_id,
@@ -2981,9 +2976,7 @@ _local_propagation(cs_lagr_particle_set_t         &p_set,
 
       assert(dt_incr >= 0.);
       /* Increment two-way-coupling source terms */
-      if (cs_glob_lagr_time_scheme->iilagr == CS_LAGR_TWOWAY_COUPLING) {
-        assert(!isnan(p_set.attr_real(p_id, CS_LAGR_MASS)));
-
+      if (cs_glob_lagr_time_scheme->iilagr == CS_LAGR_TWOWAY_COUPLING)
         cs_lagr_coupling_increment_part_contrib(p_set,
                                                 p_id,
                                                 dt_incr,
@@ -2991,37 +2984,13 @@ _local_propagation(cs_lagr_particle_set_t         &p_set,
                                                 taup[0],
                                                 force_p,
                                                 tempct);
-      }
 
       /* Increment stat in the previous cell */
-      if (cs_glob_time_step->nt_cur >= cs_glob_lagr_stat_options->idstnt) {
-        assert(!isnan(p_set.attr_real(p_id, CS_LAGR_MASS)));
-
+      if (cs_glob_time_step->nt_cur >= cs_glob_lagr_stat_options->idstnt)
         cs_lagr_stat_update_all_incr(p_set, p_id,
-                                     dt_incr / cs_glob_lagr_time_step->dtp);
-      }
+                                     dt_incr /cs_glob_lagr_time_step->dtp);
 
-      /* Returning to the same cell through an INTERIOR face means the
-         particle oscillates around that face, and tracking of the virtual
-         partner must go on without deducting any time.
-
-         Crossing a BOUNDARY face and staying in the same cell is instead
-         the normal outcome of a rebound (symmetry plane, specular wall):
-         it must fall through to the specific_face_interaction branch below,
-         which deducts the time actually spent reaching the face. The
-         interior-face restriction below mirrors the one already applied to
-         is_micro_crossing.
-
-         Without it, a parcel rebounding on a boundary face of its own cell
-         kept re-intersecting that same face with remain_time frozen, each
-         pass consuming a few 1e-7 of the trajectory, until the propagation
-         loop limit was reached and the parcel was lost with
-         CS_LAGR_TRACKING_ERR_MAX_LOOPS. In a single-cell mesh, where every
-         face is a boundary face, this lost nearly the whole population at
-         every time step. */
-
-      if (  (   cell_id == save_old_cell_id && exit_face >= 0
-             && exit_face < mesh->n_i_faces)
+      if (  (cell_id == save_old_cell_id && exit_face >= 0)
           || is_micro_crossing) {
         /* save the incremented time but continue tracking virtual partner
          * until next face to avoid spurious oscillation around a face */
@@ -3061,7 +3030,7 @@ _local_propagation(cs_lagr_particle_set_t         &p_set,
         save_old_cell_id = p_set.attr_n_lnum(p_id, 1, CS_LAGR_CELL_ID);
 
         /* Update previous state after integration */
-        cs_lagr_particles_current_to_previous(p_set, p_id);
+        p_set.current_to_previous(p_id);
 
         /* update remaining time */
         if (   exit_face < 0

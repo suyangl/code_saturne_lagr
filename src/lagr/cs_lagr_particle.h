@@ -30,6 +30,7 @@
 #include "base/cs_defs.h"
 
 #include "assert.h"
+#include "stddef.h"
 #include "string.h"
 
 /*=============================================================================
@@ -460,7 +461,7 @@ typedef struct cs_lagr_particle_set_t {
   template <typename T>
   CS_F_HOST_DEVICE
   inline
-  T&
+  const T&
   attr
   (
     cs_lnum_t           particle_id, /*!<[in] Particle id */
@@ -468,7 +469,7 @@ typedef struct cs_lagr_particle_set_t {
   ) const
   {
     assert(_p_am._count(0,attr) > 0);
-    return get_ptr_<T>(particle_id, 0, attr)[0];
+    return get_const_ptr_<T>(particle_id, 0, attr)[0];
   }
 
   /*--------------------------------------------------------------------------*/
@@ -510,7 +511,7 @@ typedef struct cs_lagr_particle_set_t {
   template <typename T>
   CS_F_HOST_DEVICE
   inline
-  T&
+  const T&
   attr_n
   (
     cs_lnum_t           p_id,     /*!<[in] Particle id */
@@ -519,7 +520,7 @@ typedef struct cs_lagr_particle_set_t {
   ) const
   {
     assert(_p_am._count(time_id,attr) > 0);
-    return get_ptr_<T>(p_id, time_id, attr)[0];
+    return get_const_ptr_<T>(p_id, time_id, attr)[0];
   }
 
   /*--------------------------------------------------------------------------*/
@@ -569,7 +570,7 @@ typedef struct cs_lagr_particle_set_t {
   (
     cs_lnum_t                p_id,  /*!<[in] particle id */
     cs_lagr_attribute_t      attr   /*!<[in] attribute id (enum) */
-  )
+  ) const
   {
     assert(_p_am._count(0,attr) > 0);
 
@@ -626,7 +627,7 @@ typedef struct cs_lagr_particle_set_t {
     cs_lnum_t                p_id,     /*!<[in] particle id */
     int                      time_id,  /*!<[in] time id */
     cs_lagr_attribute_t      attr      /*!<[in] attribute id (enum) */
-  )
+  ) const
   {
     assert(_p_am._count(time_id, attr) > 0);
 
@@ -758,148 +759,483 @@ typedef struct cs_lagr_particle_set_t {
   /* Aliases to templated methods for shorter names used in code */
   /*--------------------------------------------------------------------------*/
 
-  template<typename... Args>
-  inline auto
-  attr_real(Args&&... args) ->
-  decltype(attr<cs_real_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_real_t&
+  attr_real(cs_lnum_t p_id, cs_lagr_attribute_t attr)
   {
-    return attr<cs_real_t>(std::forward<Args>(args)...);
+    return this->attr<cs_real_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_lnum(Args&&... args) ->
-  decltype(attr<cs_lnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_real_t&
+  attr_real(cs_lnum_t p_id, cs_lagr_attribute_t attr) const
   {
-    return attr<cs_lnum_t>(std::forward<Args>(args)...);
+    return this->attr<cs_real_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_gnum(Args&&... args) ->
-  decltype(attr<cs_gnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_lnum_t&
+  attr_lnum(cs_lnum_t p_id, cs_lagr_attribute_t attr)
   {
-    return attr<cs_gnum_t>(std::forward<Args>(args)...);
+    return this->attr<cs_lnum_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_real(Args&&... args) ->
-  decltype(attr_n<cs_real_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_lnum_t&
+  attr_lnum(cs_lnum_t p_id, cs_lagr_attribute_t attr) const
   {
-    return attr_n<cs_real_t>(std::forward<Args>(args)...);
+    return this->attr<cs_lnum_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_lnum(Args&&... args) ->
-  decltype(attr_n<cs_lnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_gnum_t&
+  attr_gnum(cs_lnum_t p_id, cs_lagr_attribute_t attr)
   {
-    return attr_n<cs_lnum_t>(std::forward<Args>(args)...);
+    return this->attr<cs_gnum_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_gnum(Args&&... args) ->
-  decltype(attr_n<cs_gnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_gnum_t&
+  attr_gnum(cs_lnum_t p_id, cs_lagr_attribute_t attr) const
   {
-    return attr_n<cs_gnum_t>(std::forward<Args>(args)...);
+    return this->attr<cs_gnum_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_real_ptr(Args&&... args) ->
-  decltype(attr_get_ptr<cs_real_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_real_t&
+  attr_n_real(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr)
   {
-    return attr_get_ptr<cs_real_t>(std::forward<Args>(args)...);
+    return attr_n<cs_real_t>(p_id, time_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_lnum_ptr(Args&&... args) ->
-  decltype(attr_get_ptr<cs_lnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_real_t&
+  attr_n_real(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr) const
   {
-    return attr_get_ptr<cs_lnum_t>(std::forward<Args>(args)...);
+    return attr_n<cs_real_t>(p_id, time_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_gnum_ptr(Args&&... args) ->
-  decltype(attr_get_ptr<cs_gnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_lnum_t&
+  attr_n_lnum(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr)
   {
-    return attr_get_ptr<cs_gnum_t>(std::forward<Args>(args)...);
+    return attr_n<cs_lnum_t>(p_id, time_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_real_const_ptr(Args&&... args) ->
-  decltype(attr_get_const_ptr<cs_real_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_lnum_t&
+  attr_n_lnum(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr) const
   {
-    return attr_get_const_ptr<cs_real_t>(std::forward<Args>(args)...);
+    return attr_n<cs_lnum_t>(p_id, time_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_lnum_const_ptr(Args&&... args) ->
-  decltype(attr_get_const_ptr<cs_lnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_gnum_t&
+  attr_n_gnum(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr)
   {
-    return attr_get_const_ptr<cs_lnum_t>(std::forward<Args>(args)...);
+    return attr_n<cs_gnum_t>(p_id, time_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_gnum_const_ptr(Args&&... args) ->
-  decltype(attr_get_const_ptr<cs_gnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_gnum_t&
+  attr_n_gnum(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr) const
   {
-    return attr_get_const_ptr<cs_gnum_t>(std::forward<Args>(args)...);
+    return attr_n<cs_gnum_t>(p_id, time_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_real_ptr(Args&&... args) ->
-  decltype(attr_n_get_ptr<cs_real_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_real_t *
+  attr_real_ptr(cs_lnum_t p_id, cs_lagr_attribute_t attr)
   {
-    return attr_n_get_ptr<cs_real_t>(std::forward<Args>(args)...);
+    return attr_get_ptr<cs_real_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_lnum_ptr(Args&&... args) ->
-  decltype(attr_n_get_ptr<cs_lnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_real_t *
+  attr_real_const_ptr(cs_lnum_t p_id, cs_lagr_attribute_t attr) const
   {
-    return attr_n_get_ptr<cs_lnum_t>(std::forward<Args>(args)...);
+    return attr_get_const_ptr<cs_real_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_gnum_ptr(Args&&... args) ->
-  decltype(attr_n_get_ptr<cs_gnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_lnum_t *
+  attr_lnum_ptr(cs_lnum_t p_id, cs_lagr_attribute_t attr)
   {
-    return attr_n_get_ptr<cs_gnum_t>(std::forward<Args>(args)...);
+    return attr_get_ptr<cs_lnum_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_real_const_ptr(Args&&... args) ->
-  decltype(attr_n_get_const_ptr<cs_real_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_lnum_t *
+  attr_lnum_const_ptr(cs_lnum_t p_id, cs_lagr_attribute_t attr) const
   {
-    return attr_n_get_const_ptr<cs_real_t>(std::forward<Args>(args)...);
+    return attr_get_const_ptr<cs_lnum_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_lnum_const_ptr(Args&&... args) ->
-  decltype(attr_n_get_const_ptr<cs_lnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline cs_gnum_t *
+  attr_gnum_ptr(cs_lnum_t p_id, cs_lagr_attribute_t attr)
   {
-    return attr_n_get_const_ptr<cs_lnum_t>(std::forward<Args>(args)...);
+    return attr_get_ptr<cs_gnum_t>(p_id, attr);
   }
 
-  template<typename... Args>
-  inline auto
-  attr_n_gnum_const_ptr(Args&&... args) ->
-  decltype(attr_n_get_const_ptr<cs_gnum_t>(std::forward<Args>(args)...))
+  CS_F_HOST_DEVICE
+  inline const cs_gnum_t *
+  attr_gnum_const_ptr(cs_lnum_t p_id, cs_lagr_attribute_t attr) const
   {
-    return attr_n_get_const_ptr<cs_gnum_t>(std::forward<Args>(args)...);
+    return attr_get_const_ptr<cs_gnum_t>(p_id, attr);
+  }
+
+  CS_F_HOST_DEVICE
+  inline cs_real_t *
+  attr_n_real_ptr(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr)
+  {
+    return attr_n_get_ptr<cs_real_t>(p_id, time_id, attr);
+  }
+
+  CS_F_HOST_DEVICE
+  inline const cs_real_t *
+  attr_n_real_const_ptr(cs_lnum_t           p_id,
+                        int                 time_id,
+                        cs_lagr_attribute_t attr) const
+  {
+    return attr_n_get_const_ptr<cs_real_t>(p_id, time_id, attr);
+  }
+
+  CS_F_HOST_DEVICE
+  inline cs_lnum_t *
+  attr_n_lnum_ptr(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr)
+  {
+    return attr_n_get_ptr<cs_lnum_t>(p_id, time_id, attr);
+  }
+
+  CS_F_HOST_DEVICE
+  inline const cs_lnum_t *
+  attr_n_lnum_const_ptr(cs_lnum_t           p_id,
+                        int                 time_id,
+                        cs_lagr_attribute_t attr) const
+  {
+    return attr_n_get_const_ptr<cs_lnum_t>(p_id, time_id, attr);
+  }
+
+  CS_F_HOST_DEVICE
+  inline cs_gnum_t *
+  attr_n_gnum_ptr(cs_lnum_t p_id, int time_id, cs_lagr_attribute_t attr)
+  {
+    return attr_n_get_ptr<cs_gnum_t>(p_id, time_id, attr);
+  }
+
+  CS_F_HOST_DEVICE
+  inline const cs_gnum_t *
+  attr_n_gnum_const_ptr(cs_lnum_t           p_id,
+                        int                 time_id,
+                        cs_lagr_attribute_t attr) const
+  {
+    return attr_n_get_const_ptr<cs_gnum_t>(p_id, time_id, attr);
+  }
+
+  /*--------------------------------------------------------------------------*/
+  /* Semantic member accessors for particles                                   */
+  /*--------------------------------------------------------------------------*/
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t *
+  coords(cs_lnum_t p_id)
+  {
+    return attr_real_ptr(p_id, CS_LAGR_COORDS);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  const cs_real_t *
+  coords(cs_lnum_t p_id) const
+  {
+    return attr_real_const_ptr(p_id, CS_LAGR_COORDS);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t *
+  velocity(cs_lnum_t p_id)
+  {
+    return attr_real_ptr(p_id, CS_LAGR_VELOCITY);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  const cs_real_t *
+  velocity(cs_lnum_t p_id) const
+  {
+    return attr_real_const_ptr(p_id, CS_LAGR_VELOCITY);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t *
+  velocity_seen(cs_lnum_t p_id)
+  {
+    return attr_real_ptr(p_id, CS_LAGR_VELOCITY_SEEN);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  const cs_real_t *
+  velocity_seen(cs_lnum_t p_id) const
+  {
+    return attr_real_const_ptr(p_id, CS_LAGR_VELOCITY_SEEN);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t&
+  mass(cs_lnum_t p_id)
+  {
+    return attr_real(p_id, CS_LAGR_MASS);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t
+  mass(cs_lnum_t p_id) const
+  {
+    return attr_real(p_id, CS_LAGR_MASS);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t&
+  diameter(cs_lnum_t p_id)
+  {
+    return attr_real(p_id, CS_LAGR_DIAMETER);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t
+  diameter(cs_lnum_t p_id) const
+  {
+    return attr_real(p_id, CS_LAGR_DIAMETER);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t&
+  stat_weight(cs_lnum_t p_id)
+  {
+    return attr_real(p_id, CS_LAGR_STAT_WEIGHT);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t
+  stat_weight(cs_lnum_t p_id) const
+  {
+    return attr_real(p_id, CS_LAGR_STAT_WEIGHT);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_lnum_t&
+  cell_id(cs_lnum_t p_id)
+  {
+    return attr_lnum(p_id, CS_LAGR_CELL_ID);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_lnum_t
+  cell_id(cs_lnum_t p_id) const
+  {
+    return attr_lnum(p_id, CS_LAGR_CELL_ID);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t&
+  residence_time(cs_lnum_t p_id)
+  {
+    return attr_real(p_id, CS_LAGR_RESIDENCE_TIME);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t
+  residence_time(cs_lnum_t p_id) const
+  {
+    return attr_real(p_id, CS_LAGR_RESIDENCE_TIME);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t&
+  remaining_integ_time(cs_lnum_t p_id)
+  {
+    return attr_real(p_id, CS_LAGR_REMAINING_INTEG_TIME);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t
+  remaining_integ_time(cs_lnum_t p_id) const
+  {
+    return attr_real(p_id, CS_LAGR_REMAINING_INTEG_TIME);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t&
+  tr_truncate(cs_lnum_t p_id)
+  {
+    return attr_real(p_id, CS_LAGR_TR_TRUNCATE);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t
+  tr_truncate(cs_lnum_t p_id) const
+  {
+    return attr_real(p_id, CS_LAGR_TR_TRUNCATE);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_lnum_t&
+  tr_reposition(cs_lnum_t p_id)
+  {
+    return attr_lnum(p_id, CS_LAGR_TR_REPOSITION);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_lnum_t
+  tr_reposition(cs_lnum_t p_id) const
+  {
+    return attr_lnum(p_id, CS_LAGR_TR_REPOSITION);
+  }
+
+  /* Values at previous time step (time_id = 1) */
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t *
+  coords_prev(cs_lnum_t p_id)
+  {
+    return attr_n_real_ptr(p_id, 1, CS_LAGR_COORDS);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  const cs_real_t *
+  coords_prev(cs_lnum_t p_id) const
+  {
+    return attr_n_real_const_ptr(p_id, 1, CS_LAGR_COORDS);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_lnum_t&
+  cell_id_prev(cs_lnum_t p_id)
+  {
+    return attr_n_lnum(p_id, 1, CS_LAGR_CELL_ID);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_lnum_t
+  cell_id_prev(cs_lnum_t p_id) const
+  {
+    return attr_n_lnum(p_id, 1, CS_LAGR_CELL_ID);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t *
+  velocity_prev(cs_lnum_t p_id)
+  {
+    return attr_n_real_ptr(p_id, 1, CS_LAGR_VELOCITY);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  const cs_real_t *
+  velocity_prev(cs_lnum_t p_id) const
+  {
+    return attr_n_real_const_ptr(p_id, 1, CS_LAGR_VELOCITY);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  cs_real_t *
+  velocity_seen_prev(cs_lnum_t p_id)
+  {
+    return attr_n_real_ptr(p_id, 1, CS_LAGR_VELOCITY_SEEN);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  const cs_real_t *
+  velocity_seen_prev(cs_lnum_t p_id) const
+  {
+    return attr_n_real_const_ptr(p_id, 1, CS_LAGR_VELOCITY_SEEN);
+  }
+
+  /* Utility operations */
+
+  CS_F_HOST_DEVICE
+  inline
+  void
+  attributes_fill_zero(cs_lnum_t p_id)
+  {
+    memset(_p_buffer.data() + _p_am.extents * p_id, 0, _p_am.extents);
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  void
+  set_coords(cs_lnum_t p_id, const cs_real_t c[3])
+  {
+    cs_real_t *coord = coords(p_id);
+    coord[0] = c[0];
+    coord[1] = c[1];
+    coord[2] = c[2];
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  void
+  set_velocity(cs_lnum_t p_id, const cs_real_t v[3])
+  {
+    cs_real_t *vel = velocity(p_id);
+    vel[0] = v[0];
+    vel[1] = v[1];
+    vel[2] = v[2];
+  }
+
+  CS_F_HOST_DEVICE
+  inline
+  void
+  set_cell_id(cs_lnum_t p_id, cs_lnum_t c)
+  {
+    cell_id(p_id) = c;
+  }
+
+  CS_F_HOST
+  inline
+  void
+  current_to_previous(cs_lnum_t p_id)
+  {
+    unsigned char *p_buf = _p_buffer.data() + _p_am.extents * p_id;
+
+    for (int i_attr = 0; i_attr < CS_LAGR_N_ATTRIBUTES; i_attr++) {
+      auto attr = static_cast<cs_lagr_attribute_t>(i_attr);
+      if (_p_am._count(1, attr) > 0 && _p_am._count(0, attr) > 0) {
+        memcpy(p_buf + _p_am._displ(1, attr),
+               p_buf + _p_am._displ(0, attr),
+               _p_am.size[attr]);
+      }
+    }
+    *((cs_lnum_t *)(p_buf + _p_am._displ(1, CS_LAGR_RANK_ID)))
+      = cs_glob_rank_id;
   }
 
 private:
@@ -975,7 +1311,7 @@ private:
     cs_lnum_t           p_id,    /*!<[in] particle id */
     int                 time_id, /*!<[in] time id */
     cs_lagr_attribute_t attr     /*!<[in] attribute id (enum) */
-  )
+  ) const
   {
     return reinterpret_cast<const T*>( _p_buffer.data()
                                      + _p_am.extents * p_id
@@ -989,6 +1325,476 @@ private:
 
 #endif
 } cs_lagr_particle_set_t;
+
+#if defined(__cplusplus)
+
+/*=============================================================================
+ * C++ Semantic particle accessors in namespace cs::lagr
+ *============================================================================*/
+
+namespace cs::lagr {
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Get pointer to particle coordinates.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return pointer to particle coordinates (x, y, z)
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t *
+coords(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.coords(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline const cs_real_t *
+coords(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.coords(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Get pointer to particle velocity.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return pointer to particle velocity (u, v, w)
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t *
+velocity(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.velocity(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline const cs_real_t *
+velocity(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.velocity(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Get pointer to particle seen fluid velocity.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return pointer to fluid velocity seen by particle
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t *
+velocity_seen(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.velocity_seen(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline const cs_real_t *
+velocity_seen(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.velocity_seen(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle mass.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle mass
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t&
+mass(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.mass(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_real_t
+mass(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.mass(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle diameter.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle diameter
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t&
+diameter(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.diameter(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_real_t
+diameter(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.diameter(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle statistical weight.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle statistical weight
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t&
+stat_weight(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.stat_weight(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_real_t
+stat_weight(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.stat_weight(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle cell id.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle cell id
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_lnum_t&
+cell_id(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.cell_id(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_lnum_t
+cell_id(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.cell_id(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle residence time.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle residence time
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t&
+residence_time(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.residence_time(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_real_t
+residence_time(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.residence_time(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle remaining integration time.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle remaining integration time
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t&
+remaining_integ_time(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.remaining_integ_time(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_real_t
+remaining_integ_time(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.remaining_integ_time(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle tracking truncation indicator.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle truncation indicator
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t&
+tr_truncate(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.tr_truncate(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_real_t
+tr_truncate(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.tr_truncate(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle tracking reposition count.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle reposition count
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_lnum_t&
+tr_reposition(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.tr_reposition(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_lnum_t
+tr_reposition(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.tr_reposition(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Get pointer to particle coordinates at previous time step (n-1).
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return pointer to particle coordinates at time n-1
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t *
+coords_prev(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.coords_prev(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline const cs_real_t *
+coords_prev(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.coords_prev(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Access particle cell id at previous time step (n-1).
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return reference to particle cell id at time n-1
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_lnum_t&
+cell_id_prev(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.cell_id_prev(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline cs_lnum_t
+cell_id_prev(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.cell_id_prev(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Get pointer to particle velocity at previous time step (n-1).
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return pointer to particle velocity at time n-1
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t *
+velocity_prev(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.velocity_prev(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline const cs_real_t *
+velocity_prev(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.velocity_prev(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Get pointer to fluid velocity seen at previous time step (n-1).
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ *
+ * \return pointer to fluid velocity seen at time n-1
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline cs_real_t *
+velocity_seen_prev(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.velocity_seen_prev(p_id);
+}
+
+CS_F_HOST_DEVICE
+inline const cs_real_t *
+velocity_seen_prev(const cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  return p_set.velocity_seen_prev(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Set particle coordinates (x, y, z).
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ * \param[in]      c      coordinates array of 3 components
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline void
+set_coords(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id, const cs_real_t c[3])
+{
+  p_set.set_coords(p_id, c);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Set particle velocity (u, v, w).
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ * \param[in]      v      velocity array of 3 components
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline void
+set_velocity(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id, const cs_real_t v[3])
+{
+  p_set.set_velocity(p_id, v);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Set particle cell id.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ * \param[in]      c      cell id
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline void
+set_cell_id(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id, cs_lnum_t c)
+{
+  p_set.set_cell_id(p_id, c);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Fill all attributes of a particle with zero.
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST_DEVICE
+inline void
+attributes_fill_zero(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  p_set.attributes_fill_zero(p_id);
+}
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Copy current time step attributes to previous time step (n -> n-1).
+ *
+ * \param[in, out] p_set  particle set reference
+ * \param[in]      p_id   particle id
+ */
+/*----------------------------------------------------------------------------*/
+
+CS_F_HOST
+inline void
+current_to_previous(cs_lagr_particle_set_t &p_set, cs_lnum_t p_id)
+{
+  p_set.current_to_previous(p_id);
+}
+
+} // namespace cs::lagr
+
+#endif
 
 /*=============================================================================
  * Global variables

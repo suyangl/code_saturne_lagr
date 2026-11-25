@@ -283,19 +283,31 @@ compute_anisotropic_prop(int            iprev,
   cs_real_t *energi = extra_i[phase_id].cvar_k->val;
   cs_real_t *dissip = extra_i[phase_id].cvar_ep->val;
 
+  cs_dispatch_context ctx;
+  const cs_lnum_t n_cells = cs_glob_mesh->n_cells;
+
   // Add cases where the turbulence model is based on Rij or K-Omega
   if (extra_i[phase_id].itytur == 3) {
-    for (cs_lnum_t cell_id = 0; cell_id < cs_glob_mesh->n_cells; cell_id++)
-      energi[cell_id] = 0.5 * (  extra_i[phase_id].cvar_rij->val[6*cell_id]
-          + extra_i[phase_id].cvar_rij->val[6*cell_id+1]
-          + extra_i[phase_id].cvar_rij->val[6*cell_id+2]);
+    /* Local copy for the device lambda (host struct member). */
+    const cs_real_t *rij = extra_i[phase_id].cvar_rij->val;
+    ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t cell_id) {
+      energi[cell_id] = 0.5 * (  rij[6*cell_id]
+          + rij[6*cell_id+1]
+          + rij[6*cell_id+2]);
+    });
+    ctx.wait();
 
   }
   else if (extra_i[phase_id].iturb == CS_TURB_K_OMEGA) {
 
-    for (cs_lnum_t cell_id = 0; cell_id < cs_glob_mesh->n_cells; cell_id++)
-      dissip[cell_id] = extra_i[phase_id].cmu * energi[cell_id]
-        * extra_i[phase_id].cvar_omg->val[cell_id];
+    /* Local copies for the device lambda (host struct members). */
+    const cs_real_t cmu = extra_i[phase_id].cmu;
+    const cs_real_t *cvar_omg = extra_i[phase_id].cvar_omg->val;
+    ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t cell_id) {
+      dissip[cell_id] = cmu * energi[cell_id]
+        * cvar_omg[cell_id];
+    });
+    ctx.wait();
   }
 
   /* Compute anisotropic value of the lagr_time and diffusion matrix */
@@ -619,9 +631,11 @@ cs_lagr_aux_mean_fluid_quantities(int            iprev, // FIXME compute at curr
     cs_real_t *cpro_pgradlagr = cs_field_by_name("lagr_pressure_gradient")->val;
 
     /* TODO FB: init grad_pr... */
-    for (cs_lnum_t iel = 0; iel < cs_glob_mesh->n_cells; iel++)
+    ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t iel) {
       for (cs_lnum_t id = 0; id < 3; id++)
         grad_pr[iel][id] = cpro_pgradlagr[3*iel + id];
+    });
+    ctx.wait();
 
     if (   turb_disp_model || cs_glob_lagr_model->shape > 0
         || cs_glob_lagr_time_scheme->interpol_field != CS_LAGR_INTERPOL_NONE) {
@@ -635,12 +649,13 @@ cs_lagr_aux_mean_fluid_quantities(int            iprev, // FIXME compute at curr
       if (cpro_vgradlagr != nullptr && grad_vel != nullptr) {
         /* TODO FB: init grad_vel... */
         //grad_vel = cs_array<cs_real_33_t>(cpro_vgradlagr, n_cells);
-        for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
           for (cs_lnum_t i = 0; i < 3; i++) {
             for (cs_lnum_t j = 0; j < 3; j++)
               grad_vel[c_id][i][j] = cpro_vgradlagr[c_id][i][j];
           }
-        }
+        });
+        ctx.wait();
       }
     }
     compute_particle_covariance_gradient(phase_id,
@@ -903,13 +918,13 @@ cs_lagr_aux_mean_fluid_quantities(int            iprev, // FIXME compute at curr
         cs_real_3_t *cell_max = extra_i[phase_id].cell_vel_max;
         const cs_lnum_t ncelet = cs_glob_mesh->n_cells_with_ghosts;
 
-        /* Initialize with local cell velocity */
-        for (cs_lnum_t c = 0; c < ncelet; c++) {
-          for (int i = 0; i < 3; i++) {
-            cell_min[c][i] = cvar_vel[c][i];
-            cell_max[c][i] = cvar_vel[c][i];
-          }
-        }
+        /* Initialize with local cell velocity on host: the neighbor
+           propagation loops below run on host, so a device init would
+           force the buffers back (unified-memory page faults). */
+        cs_array_real_copy(3*ncelet, (const cs_real_t *)cvar_vel,
+                           (cs_real_t *)cell_min);
+        cs_array_real_copy(3*ncelet, (const cs_real_t *)cvar_vel,
+                           (cs_real_t *)cell_max);
 
         /* Update from internal face neighbors */
         const cs_lnum_t n_i_faces = cs_glob_mesh->n_i_faces;
@@ -1017,8 +1032,10 @@ cs_lagr_aux_mean_fluid_quantities(int            iprev, // FIXME compute at curr
     }
     else if (extra_i[phase_id].iturb == CS_TURB_K_OMEGA) {
       cs_real_t *v_omg = extra_i[phase_id].cvar_omg->val;
+      /* Local copy for the device lambda (extra_i is a host pointer). */
+      cs_real_t cmu = extra_i[phase_id].cmu;
       ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
-        dissip[c_id] = extra_i[phase_id].cmu * energi[c_id] * v_omg[c_id];
+        dissip[c_id] = cmu * energi[c_id] * v_omg[c_id];
       });
     }
     else if (extra_i[phase_id].itytur != 2

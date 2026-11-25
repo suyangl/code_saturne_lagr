@@ -48,6 +48,7 @@
 #include "bft/bft_error.h"
 
 #include "base/cs_base.h"
+#include "base/cs_dispatch.h"
 #include "base/cs_halo.h"
 #include "base/cs_math.h"
 #include "base/cs_mem.h"
@@ -120,20 +121,36 @@ cs_lagr_porosity(void)
   const cs_lnum_t n_cells_ext = mesh->n_cells_with_ghosts;
   const cs_lnum_t n_i_faces = mesh->n_i_faces;
 
+  /* Separate host/device buffers: the particle scatter below writes the
+     host buffer, a single explicit copy replaces unified-memory page
+     fault migrations. */
   cs_real_t *covered_surface = nullptr;
-  CS_MALLOC_HD(covered_surface, mesh->n_cells_with_ghosts, cs_real_t, cs_alloc_mode);
+  CS_MALLOC_HD(covered_surface, mesh->n_cells_with_ghosts, cs_real_t,
+               CS_ALLOC_HOST_DEVICE);
 
-  /* Initialization */
-  for (cs_lnum_t cell_id = 0; cell_id < n_cells_ext; cell_id++)
-    covered_surface[cell_id] = 0.;
+  cs_dispatch_context ctx;
 
-  for (cs_lnum_t face_id = 0; face_id < n_i_faces ; face_id++) {
+  /* Initialization on host (scatter below accumulates on host) */
+  cs_array_real_fill_zero(n_cells_ext, covered_surface);
+
+  /* Local copies for the device lambda (host struct members) */
+  cs_real_t *i_face_normal = fvq->i_face_normal;
+  const cs_real_t *i_face_normal_g = mq_g->i_face_normal;
+  const int *i_face_zone_id = internal_conditions->i_face_zone_id;
+
+  cs_real_t *d_i_face_normal
+    = (cs_real_t *)cs_get_device_ptr(i_face_normal);
+  const cs_real_t *d_i_face_normal_g
+    = (const cs_real_t *)cs_get_device_ptr_const(i_face_normal_g);
+
+  ctx.parallel_for(n_i_faces, [=] CS_F_HOST_DEVICE (cs_lnum_t face_id) {
     /* Internal face flagged as internal deposition */
-    if (internal_conditions->i_face_zone_id[face_id] >= 0) {
+    if (i_face_zone_id[face_id] >= 0) {
       for (cs_lnum_t j = 0; j < 3; j++)
-        fvq->i_face_normal[3*face_id+j] = mq_g->i_face_normal[3*face_id+j];
+        d_i_face_normal[3*face_id+j] = d_i_face_normal_g[3*face_id+j];
     }
-  }
+  });
+  ctx.wait();
 
   if (lagr_model->deposition == 1) {
 
@@ -159,33 +176,44 @@ cs_lagr_porosity(void)
   if (mesh->halo != nullptr)
     cs_halo_sync_var(mesh->halo, CS_HALO_STANDARD, covered_surface);
 
-  /* Compute fluid section and clip it to 0 if negative */
-  for (cs_lnum_t face_id = 0; face_id < mesh->n_i_faces; face_id++) {
+  /* Upload scattered host buffer to device (single copy) */
+  cs_sync_h2d(covered_surface);
 
+  /* Compute fluid section and clip it to 0 if negative */
+  const cs_lnum_2_t *i_face_cells = (const cs_lnum_2_t *)(mesh->i_face_cells);
+  cs_real_t *i_face_surf = fvq->i_face_surf;
+
+  const cs_real_t *d_covered_surface
+    = (const cs_real_t *)cs_get_device_ptr_const(covered_surface);
+  cs_real_t *d_i_face_surf
+    = (cs_real_t *)cs_get_device_ptr(i_face_surf);
+
+  ctx.parallel_for(n_i_faces, [=] CS_F_HOST_DEVICE (cs_lnum_t face_id) {
     /* Internal face flagged as internal deposition */
-    if (internal_conditions->i_face_zone_id[face_id] >= 0) {
-      cs_lnum_t cell_id1 = mesh->i_face_cells[face_id][0];;
-      cs_lnum_t cell_id2 = mesh->i_face_cells[face_id][1];
+    if (i_face_zone_id[face_id] >= 0) {
+      cs_lnum_t cell_id1 = i_face_cells[face_id][0];
+      cs_lnum_t cell_id2 = i_face_cells[face_id][1];
       /* Remove from the particle area from fluid section */
       for (cs_lnum_t id = 0; id < 3; id++)
-        fvq->i_face_normal[3*face_id + id]
-          -= (covered_surface[cell_id1] + covered_surface[cell_id2])
-             * mq_g->i_face_normal[3*face_id + id]
-             / fvq->i_face_surf[face_id];
+        d_i_face_normal[3*face_id + id]
+          -= (d_covered_surface[cell_id1] + d_covered_surface[cell_id2])
+             * d_i_face_normal_g[3*face_id + id]
+             / d_i_face_surf[face_id];
 
       /* If S_fluid . S is negative, that means we removed too much surface
        * from fluid surface */
       cs_real_t temp
-        = cs_math_3_dot_product(fvq->i_face_normal + 3*face_id,
-                                mq_g->i_face_normal + 3*face_id);
+        = cs_math_3_dot_product(d_i_face_normal + 3*face_id,
+                                d_i_face_normal_g + 3*face_id);
       if (temp <= 0.) {
         for (cs_lnum_t j = 0; j < 3; j++)
-          fvq->i_face_normal[3*face_id+j] = 0.;
+          d_i_face_normal[3*face_id+j] = 0.;
       }
-      fvq->i_face_surf[face_id]
-        = cs_math_3_norm(fvq->i_face_normal + 3*face_id);
+      d_i_face_surf[face_id]
+        = cs_math_3_norm(d_i_face_normal + 3*face_id);
     }
-  }
+  });
+  ctx.wait();
 
   CS_FREE(covered_surface);
 }

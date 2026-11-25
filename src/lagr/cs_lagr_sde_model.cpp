@@ -76,7 +76,6 @@
 
 #include "lagr/cs_lagr_sde_model.h"
 #include "atmo/cs_air_props.h"
-#include "atmo/cs_atmo.h"
 #include "ctwr/cs_ctwr.h"
 
 /*----------------------------------------------------------------------------*/
@@ -100,30 +99,6 @@
 
 static const cs_real_t  _c_stephan = 5.6703e-8;
 static const cs_real_t  _tkelvi = 273.15;
-
-/* Per-cell mass of water vapour still available for condensation on the
-   cooling tower droplets, in kg. Filled once per Lagrangian time step by
-   cs_lagr_sde_model_vapour_budget_init and consumed by _sde_i_ct. */
-static cs_real_t  *_vapour_budget = nullptr;
-
-/*----------------------------------------------------------------------------*/
-/*!
- * \brief True when a droplet belongs to the humid air bulk.
- *
- * With the Lagrangian cloud microphysics, the plume condensate is small
- * enough to be carried by the humid air: its water is part of the
- * transported total water and its mass and temperature are integrated with
- * the Eulerian microphysics, not during the Lagrangian tracking. The
- * cooling tower rain is a separate phase and keeps the usual treatment.
- */
-/*----------------------------------------------------------------------------*/
-
-static inline bool
-_is_bulk_droplet(const cs_real_t  d_p)
-{
-  return (   cs_glob_atmo_option->lagrangian_microphysics == 1
-          && d_p <= cs_glob_atmo_option->bulk_droplet_d_max);
-}
 
 /*=============================================================================
  * Private function definitions
@@ -962,21 +937,7 @@ _lagich(cs_lagr_particle_set_t  &p_set,
   /* Small value (for numeric precision) */
   cs_real_t precis = 1e-15;
 
-  /* Latent heat of vaporisation of the coal moisture, J/kg.
-   *
-   * FIXME hard-coded, and taken near the boiling point. The cooling tower
-   * droplet model now builds it from air_prop->hv0, the latent heat at
-   * 0 degC, corrected by Kirchhoff's relation
-   * L_v(T) = hv0 + (cp_v - cp_l) T, which stays within 0.1% of the
-   * reference values between 0 and 40 degC where 2.263e6 J/kg is 6 to 10%
-   * too low.
-   *
-   * It was left untouched here because drying coal grains are heated to
-   * and beyond 100 degC, so the boiling point value may well be the
-   * intended one; deciding this needs a look at the coal drying model
-   * rather than a blind alignment. The same constant appears in _lagsec,
-   * where it feeds the Clausius-Clapeyron relation for the saturation
-   * pressure of the moisture. */
+  /* Latent heat in J/kg */
   cs_real_t lv = 2263000.0;
 
   /* Check for models activation */
@@ -1588,19 +1549,8 @@ static void
 _sde_i_ct(cs_lagr_particle_set_t  &p_set,
           const cs_lnum_t          p_id,
           const cs_real_t          dt_part,
-          int                      nor,
-          bool                     bulk_pass)
+          int                      nor)
 {
-  /* Split between the two droplet populations.
-     bulk_pass is true when called by the Eulerian microphysics step, which
-     owns the plume condensate, and false when called by the Lagrangian
-     tracking, which owns the cooling tower rain. Each droplet is integrated
-     by exactly one of the two. */
-
-  if (_is_bulk_droplet(p_set.attr_n_real(p_id, 1, CS_LAGR_DIAMETER))
-      != bulk_pass)
-    return;
-
   /* Adressing structures of the Lagrangian module */
   cs_lagr_extra_module_t *extra = cs_glob_lagr_extra_module;
 
@@ -1608,28 +1558,14 @@ _sde_i_ct(cs_lagr_particle_set_t  &p_set,
   cs_ctwr_option_t              *ct_opt = cs_get_glob_ctwr_option();
   int                            evap_model= ct_opt->evap_model;
 
-  /* Absolute humidity of the carrier phase, and its value at saturation.
-
-     The cooling tower module carries them as fields. The humid atmosphere
-     model does not: it transports the total water "ym_water" and diagnoses
-     the liquid part in "liquid_water", from which the vapour follows. The
-     droplet closure is therefore usable in a plume computation that has no
-     cooling tower at all. */
-
-  const cs_real_t *x   = nullptr;
-  const cs_real_t *x_s = nullptr;
-  {
-    const cs_field_t *f_x   = cs_field_by_name_try("humidity");
-    const cs_field_t *f_x_s = cs_field_by_name_try("x_s");
-    if (f_x != nullptr)
-      x = f_x->val;
-    if (f_x_s != nullptr)
-      x_s = f_x_s->val;
-  }
+  /* Adressing field values of the Eulerian cooling tower model */
+  cs_real_t *x   = cs_field_by_name("humidity")->val;
+  cs_real_t *x_s = cs_field_by_name("x_s")->val;
 
   /* User defined air properties of the cooling tower model*/
   cs_air_fluid_props_t *air_prop = cs_glob_air_props;
   cs_real_t lambda_h             = air_prop->lambda_h;
+  cs_real_t hv0                  = air_prop->hv0;
   cs_real_t rho_l                = air_prop->rho_l;
 
   /* General fluid properties*/
@@ -1638,14 +1574,13 @@ _sde_i_ct(cs_lagr_particle_set_t  &p_set,
 
   /* Constant local numerical parameters*/
   cs_real_t molmassrat = air_prop->molmass_rat;
+  cs_real_t lv = 2263000.0; /* J/kg */
 
   /* use previous step for t_order == 1 or prediction step
    * and current one for correction step */
   cs_lnum_t cell_id = p_set.attr_n_lnum(p_id, 2-nor, CS_LAGR_CELL_ID);
   /* Calculating the current particle surface */
   cs_real_t dia = p_set.attr_n_real(p_id, 1, CS_LAGR_DIAMETER);
-  assert(isfinite(dia));
-  //assert(dia > 0.0);
   //cs_real_t surf_p = cs_math_pi*cs_math_pow2(dia) * 0.25;
 
   /* Drop diameter based Reynolds number */
@@ -1660,37 +1595,17 @@ _sde_i_ct(cs_lagr_particle_set_t  &p_set,
   cs_real_t re_p = rho_h * cs_math_3_distance(vel_p, vel_s) * dia / mu_h;
 
   /* Prandtl number */
-  /* Local absolute humidity, from the cooling tower fields when present,
-     from the atmospheric total water otherwise. */
-
-  cs_real_t x_c, x_s_c;
-
-  if (x != nullptr && x_s != nullptr) {
-    x_c   = x[cell_id];
-    x_s_c = x_s[cell_id];
-  }
-  else {
-    const cs_field_t *f_qw = cs_field_by_name("ym_water");
-    const cs_field_t *f_ql = cs_field_by_name_try("liquid_water");
-    const cs_field_t *f_tc = cs_field_by_name_try("real_temperature");
-
-    cs_real_t q_v = f_qw->val[cell_id];
-    if (f_ql != nullptr)
-      q_v -= f_ql->val[cell_id];
-    q_v = cs::max(q_v, 0.);
-
-    x_c   = q_v / cs::max(1. - q_v, cs_math_epzero);
-    x_s_c = (f_tc != nullptr) ? cs_air_x_sat(f_tc->val[cell_id], p0) : x_c;
-  }
-
-  cs_real_t cp_h = cs_air_cp_humidair(x_c, x_s_c);
+  cs_real_t cp_h = cs_air_cp_humidair(x[cell_id], x_s[cell_id]);
   cs_real_t pr   = cp_h * mu_h / lambda_h;
 
   cs_real_t t_l_p
     = p_set.attr_n_real(p_id, 1, CS_LAGR_TEMPERATURE);
+  cs_real_t temp_h
+    = p_set.attr_n_real(p_id, 1, CS_LAGR_TEMPERATURE_SEEN);
   cs_real_t x_s_tl = cs_air_x_sat(t_l_p, p0);
+  cs_real_t x_s_th = cs_air_x_sat(temp_h, p0);
   cs_real_t xlew   = _lewis_factor(evap_model, molmassrat,
-                                   x_c, x_s_tl);
+                                   x[cell_id], x_s_tl);
 
   /* Nusselt number correlations */
   /* Ranz-Marshall or Hughmark when re_p <= 776.06 && pr <= 250. */
@@ -1727,152 +1642,67 @@ _sde_i_ct(cs_lagr_particle_set_t  &p_set,
   /* Sherwood number */
   cs_real_t sherw = 2. + 0.55 * sqrt(re_p) * cbrt(prt);
 
+  /* Parameters for Yv, equation (54) */
+  cs_real_t r_univ = cs_physical_constants_r; // J/(mol.K), 8.314
+
   cs_real_t temp_p = p_set.attr_n_real(p_id, 1, CS_LAGR_TEMPERATURE);
-  assert(isfinite(temp_p));
-  assert(temp_p + _tkelvi > 0.0);
 
-  /* Latent heat of vaporisation at the droplet temperature, J/kg, from
-     air_prop->hv0, the latent heat at 0 degC, corrected by Kirchhoff's
-     relation L_v(T) = hv0 + (cp_v - cp_l) T.
+  /* Molar masses of vapour and dry air (kg/mol) */
+  cs_real_t m_v = 0.0180154;
+  cs_real_t m_f = 0.028960;
 
-     The constant 2.263e6 J/kg used previously is the latent heat near the
-     boiling point: 6 to 10% too low over the 0-40 degC range of a cloud
-     droplet. hv0 alone would be exact at 0 degC but drift to +4% at
-     40 degC, whereas the expression below stays within 0.1%. */
+  /* Boiling Temperature with Clausius-Clapeyron
+     ------------------------------------------- */
+  cs_real_t pressure_ref = 101325.;
+  cs_real_t temp_ref = 373.15;
+  cs_real_t r_v = r_univ / m_v;
 
-  const cs_real_t lv
-    = air_prop->hv0 + (air_prop->cp_v - air_prop->cp_l) * temp_p;
+  // TODO with atmo module take meteo pressure
+  cs_real_t t_ebl_inv = 1. / temp_ref - r_v / lv * log(p0 / pressure_ref);
 
-  /* Vapor mass fractions around the droplet
-     --------------------------------------- */
+  /* Mass fraction of vapor (y_v) */
+  cs_real_t y_v_far = x[cell_id] / (1.0 + x[cell_id]);
 
-  /* Surface value, assuming thermodynamic equilibrium at the liquid/vapor
-     interface. x_s_tl is the absolute humidity at saturation for the droplet
-     temperature, so that
-       y_v^s = x_s / (1 + x_s)
-             = M_v x_v,s / [M_v x_v,s + M_f (1 - x_v,s)],
-     which is the exact conversion of the saturation mole fraction
-     x_v,s = e_s(T_p) / P_a into a mass fraction (M_v / M_f = 0.622 in the
-     dilute limit).
+  cs_real_t y_v_s = (m_v / (m_f + m_v)) * exp(((lv * m_v) / r_univ)
+                   * (t_ebl_inv - 1.0 / (temp_p + _tkelvi)));
+  cs_real_t y_v = y_v_s + 1.0 / 3.0 * (y_v_far - y_v_s);
 
-     NB: the former closure used a M_v / (M_f + M_v) = 0.384 prefactor, which
-     would only hold for an equimolar mixture, together with a
-     Clausius-Clapeyron relation at constant L_v anchored at the boiling
-     point. Both errors underestimated y_v^s (by 22 to 34% between 10 and
-     40 degrees C) and, combined with the 1/3 rule removed below, reversed
-     the sign of the mass transfer above about 70% relative humidity. */
+  /* Inverse of characteristic time */
+  cs_real_t d_time_evap = 2. * rho_h * Dv * sherw
+                        * log((1.0 - y_v_far) / (1.0 - y_v))
+                        / (rho_l * cs_math_pow2(dia));
 
-  cs_real_t y_v_s = x_s_tl / (1. + x_s_tl);
+  /* First order time scheme resolution (nor=1) */
+  if (nor == 1) {
 
-  /* Far field value, from the absolute humidity of the carrier phase */
-  cs_real_t y_v_far = x_c / (1.0 + x_c);
-
-  /* Spalding mass transfer number (Abramzon and Sirignano 1989)
-       B_M = (y_v^s - y_v^inf) / (1 - y_v^s),
-     hence 1 + B_M = (1 - y_v^inf) / (1 - y_v^s).
-
-     The driving force uses the *surface* value: the 1/3 rule of
-     Hubbard et al. (1975) is meant to evaluate the film *properties*
-     (rho_h, D_v, mu_h, cp_h), not to replace y_v^s here. Substituting the
-     film value y_v = y_v^s + (y_v^inf - y_v^s) / 3 reduced the mass flux by
-     a factor 2/3.
-
-     TODO: evaluate rho_h, D_v, mu_h and cp_h at the 1/3 film reference
-           state; they are currently taken at ambient (cell) conditions. */
-
-  cs_real_t log_1_p_b_m = log((1.0 - y_v_far) / (1.0 - y_v_s));
-
-  /* d^2 law, with a_p = d_p^2:
-       d(a_p)/dt = -k_p ln(1 + B_M),   k_p = 4 rho_h D_v Sh / rho_l > 0.
-     B_M > 0 (dry ambient air) gives evaporation, B_M < 0 (supersaturated
-     ambient air) gives condensation: the sign carries the physics and is
-     not clipped. */
-
-  cs_real_t k_p = 4. * rho_h * Dv * sherw / rho_l;
-
-  /* Freezing k_p and B_M over the time step, the d^2 law integrates
-     exactly into a linear update of a_p, unconditionally well behaved as
-     d_p goes to zero (first order scheme).
-
-     TODO: second order scheme (nor == 2). */
-
-  cs_real_t a_p = cs_math_pow2(dia) - dt_part * k_p * log_1_p_b_m;
-  assert(isfinite(a_p));
-
-  /* Fully evaporated droplet: a_p reaches zero within the time step.
-     No clipping is applied to d_p nor to m_p; the whole remaining mass is
-     released to the carrier phase through m_p^(n+1) - m_p^n by the two-way
-     coupling, and the parcel is then removed. */
-
-  if (a_p <= 0.) {
-    p_set.attr_real(p_id, CS_LAGR_DIAMETER) = 0.;
-    p_set.attr_real(p_id, CS_LAGR_MASS) = 0.;
-    p_set.set_flag(p_id, CS_LAGR_PART_TO_DELETE);
-    return;
+    cs_real_t aux = exp(- dt_part * d_time_evap);
+    dia = dia * aux;
+    p_set.attr_real(p_id, CS_LAGR_DIAMETER) = dia;
   }
 
-  dia = sqrt(a_p);
-  assert(isfinite(dia));
+  else if (nor == 2)  {
+
+    //TODO
+    /* Scheme resolution (nor=2)*/
+    cs_real_t aux1 = exp(- dt_part * d_time_evap);
+    cs_real_t ter1 = 0.5 * dia * aux1;
+
+    cs_real_t daux2 = 0.0;//FIXME
+    cs_real_t aux2 = exp(- daux2);
+    cs_real_t ter2 = 0.5 * dia * aux2;
+
+    dia = ter1 + ter2;
+
+    p_set.attr_real(p_id, CS_LAGR_DIAMETER) = dia;
+  }
+
+  /* Mass evaporate */
 
   cs_real_t new_mass = cs_math_pi * rho_l * cs_math_pow3(dia) / 6.;
 
-  /* Cap the condensation to the water vapour available in the cell
-     --------------------------------------------------------------
-
-     B_M is frozen over the time step, so a droplet sitting in supersaturated
-     air condenses as if the vapour field were inexhaustible. With a time
-     step well above the condensational growth time of a micron-sized
-     droplet, the parcels of a cell then take up more water than the cell
-     holds: in the 0D verification case the parcels gained 5.0e-4 of water
-     mass fraction over one step while the vapour only lost 2.6e-4.
-
-     The droplets of a cell therefore share a budget of vapour, filled once
-     per Lagrangian time step and consumed as they grow. This bounds the
-     transfer by what physically exists without sub-cycling the Lagrangian
-     step. Evaporation gives mass back to the same budget.
-
-     NB: the budget is the whole vapour content of the cell, which is the
-     hard physical bound. The tighter and more physical bound is the excess
-     above saturation, but it is only meaningful once the saturation
-     adjustment no longer removes that excess beforehand. */
-
-  if (_vapour_budget != nullptr) {
-
-    const cs_real_t w_p
-      = cs::max(p_set.attr_real(p_id, CS_LAGR_STAT_WEIGHT), 0.);
-
-    if (new_mass > mass) { /* condensation: draw from the cell */
-
-      const cs_real_t demand = (new_mass - mass) * w_p;
-
-      if (demand > _vapour_budget[cell_id]) {
-        const cs_real_t avail = cs::max(_vapour_budget[cell_id], 0.);
-        new_mass = (w_p > 0.) ? mass + avail / w_p : mass;
-        dia = cbrt(6. * new_mass / (cs_math_pi * rho_l));
-        _vapour_budget[cell_id] = 0.;
-      }
-      else
-        _vapour_budget[cell_id] -= demand;
-
-    }
-    else /* evaporation: give back to the cell */
-      _vapour_budget[cell_id] += (mass - new_mass) * w_p;
-
-  }
-
-  assert(isfinite(dia));
-  p_set.attr_real(p_id, CS_LAGR_DIAMETER) = dia;
-
-  /* Mass transfer rate, positive for evaporation, negative for
-     condensation */
-
-  cs_real_t mass_evap = (mass - new_mass) / dt_part;
-
-  assert(isfinite(mass));
-  assert(mass > 0.0);
-  assert(isfinite(new_mass));
-  assert(new_mass > 0.0);
-  assert(isfinite(mass_evap));
+  cs_real_t aux = exp(- dt_part * d_time_evap);
+  cs_real_t aux_2 = exp(-2* dt_part * d_time_evap);
+  cs_real_t mass_evap = mass * ( 1 - aux) * (aux_2 + aux + 1.) / dt_part;
 
   /* Particle's temperature
      -------------------------- */
@@ -1881,14 +1711,10 @@ _sde_i_ct(cs_lagr_particle_set_t  &p_set,
 
   /* Temperature of the particle seen by the fluid */
   cs_real_t cp = p_set.attr_n_real(p_id, 1, CS_LAGR_CP);
-  assert(!isnan(dia));
-  //assert(isfinite(dia));
-  //assert(dia > 0.0);
+
   /* Characteristic time*/
   cs_real_t time_temp_p = mass*cp/(cs_math_pi*nusselt*lambda_h*dia);
 
-  //assert(isfinite(time_temp_p));
-  //assert(time_temp_p > 0.0);
   /* Radiative term */
   cs_real_t Srad = 0.0; //Here, no radiative term
 
@@ -1896,40 +1722,39 @@ _sde_i_ct(cs_lagr_particle_set_t  &p_set,
     cs_real_t temp_s = p_set.attr_n_real(p_id, 1, CS_LAGR_TEMPERATURE_SEEN);
 
     /* Scheme resolution (nor=1)*/
-    /*
-     * Target particle temperature accounting for the latent heat
-     * consumed by evaporation.
-     */
-    cs_real_t xi = temp_s + time_temp_p * (Srad - mass_evap * lv) / (mass * cp);
-    /* Equilibrium particle temperature corrected for evaporative cooling. */
-    cs_real_t aux = exp(- dt_part / time_temp_p);
+    cs_real_t xi = temp_s - time_temp_p * mass_evap * lv / (mass * cp);
+    aux = exp(- dt_part / time_temp_p);
 
-    assert(isfinite(xi));
-    assert(!isnan(aux));
     cs_real_t ter1 = p_set.attr_n_real(p_id, 1, CS_LAGR_TEMPERATURE) * aux;
     cs_real_t ter2 = xi * (1. - aux);
-    assert(!isnan(ter2));
 
     temp_p = ter1 + ter2;
-    assert(isfinite(temp_p));
-    assert(temp_p + _tkelvi > 0.0);
     p_set.attr_real(p_id, CS_LAGR_TEMPERATURE) = temp_p;
 
   }
   else if (nor == 2) {
+    cs_real_t temp_s = p_set.attr_n_real(p_id, 0, CS_LAGR_TEMPERATURE_SEEN);
 
-    /* TODO: second order scheme, for the temperature as well as for the
-       diameter above.
-       The previous implementation relied on two placeholders set to zero,
-       daux2 and xi_n1, which made its fourth term a 0/0 indeterminate form
-       and the resulting temperature inconsistent even at first order.
-       Fail explicitly rather than store a meaningless temperature. */
+    /* Scheme resolution (nor=2)*/
+    cs_real_t xi = temp_s + time_temp_p * (Srad - mass_evap * lv)/ (mass * cp);
 
-    bft_error(__FILE__, __LINE__, 0,
-              _("%s (Lagrangian module):\n\n"
-                "The second order time scheme is not available for the\n"
-                "cooling tower droplet model (diameter and temperature).\n"
-                "Use a first order scheme (t_order = 1)."), __func__);
+    cs_real_t daux1 = dt_part / time_temp_p;
+    cs_real_t aux1 = exp(- daux1);
+    cs_real_t ter1 = 0.5 * p_set.attr_n_real(p_id, 1, CS_LAGR_TEMPERATURE) * aux1;
+
+    cs_real_t daux2 = 0.0; //FIXME
+    cs_real_t aux2 = exp(- daux2);
+    cs_real_t ter2 = 0.5 * p_set.attr_n_real(p_id, 1, CS_LAGR_TEMPERATURE) * aux2;
+
+    cs_real_t ter3 = xi * (- aux1 + (1 - aux1)/(daux1));
+
+
+    cs_real_t xi_n1 = 0.0; //FIXME
+    cs_real_t ter4 = xi_n1 * (1. - (1. -aux2)/(daux2));
+
+    temp_p = ter1 + ter2 + ter3 + ter4;
+
+    p_set.attr_real(p_id, CS_LAGR_TEMPERATURE) = temp_p;
 
   }
 
@@ -2005,191 +1830,51 @@ cs_lagr_sde_model(cs_lagr_particle_set_t  &p_set,
   /* Integration of cooling tower model equations*/
 
   if (cs_glob_lagr_model->physical_model == CS_LAGR_PHYS_CTWR)
-    _sde_i_ct(p_set, p_id, dt_part, nor, false /* rain, not bulk */);
+    _sde_i_ct(p_set, p_id, dt_part, nor);
 }
 
 /*----------------------------------------------------------------------------*/
-/*!
- * \brief Open the per-cell water vapour budget used by the cooling tower
- *        droplet model.
- */
-/*----------------------------------------------------------------------------*/
-
-void
-cs_lagr_sde_model_vapour_budget_init(void)
-{
-  if (cs_glob_lagr_model->physical_model != CS_LAGR_PHYS_CTWR)
-    return;
-
-  /* In the humid atmosphere model "ym_water" is the TOTAL water
-     q_w = q_v + q_l, the Eulerian liquid being diagnosed in "liquid_water".
-     Elsewhere it is the vapour. */
-
-  const cs_field_t *f_qw = cs_field_by_name_try("ym_water");
-  if (f_qw == nullptr)
-    return;
-
-  const cs_mesh_t *m = cs_glob_mesh;
-  const cs_mesh_quantities_t *mq = cs_glob_mesh_quantities;
-  const cs_lnum_t n_cells = m->n_cells;
-
-  if (_vapour_budget == nullptr)
-    CS_MALLOC(_vapour_budget, n_cells, cs_real_t);
-
-  const cs_real_t *qw = f_qw->val;
-  const cs_real_t *crom = cs_glob_lagr_extra_module->cromf->val;
-
-  const cs_field_t *f_tc = cs_field_by_name_try("real_temperature");
-
-  /* TODO with the atmo module take the meteo pressure */
-  const cs_real_t p0 = cs_glob_fluid_properties->p0;
-
-  /* With the Lagrangian cloud microphysics the bulk droplets live inside
-     "ym_water", so the water they already hold is part of q_w and is not
-     available for condensation any more. Subtracting it is what makes the
-     budget self-limiting: as the droplets grow it shrinks, and growth stops
-     exactly when the remaining vapour reaches saturation. Without this the
-     budget would be rebuilt identically at every time step, since q_w no
-     longer decreases when the droplets take water. */
-
-  cs_array<cs_real_t> _m_l_bulk;
-  const cs_real_t *m_l_bulk = nullptr;
-
-  if (cs_glob_atmo_option->lagrangian_microphysics == 1) {
-    _m_l_bulk.reshape(n_cells);
-    cs_lagr_droplet_liquid_concentration(_m_l_bulk.data());
-    m_l_bulk = _m_l_bulk.data();
-  }
-
-  for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
-
-    cs_real_t budget;
-
-    if (f_tc != nullptr) {
-
-      /* Condensable water of the cell: everything carried above saturation,
-         whether or not the Eulerian saturation adjustment has already
-         labelled part of it as liquid.
-
-         Bounding the droplets by the vapour alone is useless here: the
-         saturation adjustment runs first and has already moved the excess
-         into "liquid_water", so the remaining vapour is about a saturation
-         worth of water, twenty times what the droplets ask for, and the
-         bound never binds. Both branches then condense the same excess,
-         which is exactly the double counting that makes the water budget
-         drift. */
-
-      const cs_real_t q_s = cs_air_yw_sat(f_tc->val[c_id], p0);
-      budget = crom[c_id] * mq->cell_vol[c_id] * (qw[c_id] - q_s);
-    }
-    else
-      budget = crom[c_id] * mq->cell_vol[c_id] * qw[c_id];
-
-    if (m_l_bulk != nullptr)
-      budget -= m_l_bulk[c_id] * mq->cell_vol[c_id];
-
-    _vapour_budget[c_id] = cs::max(budget, 0.);
-  }
-}
 
 /*----------------------------------------------------------------------------*/
 /*!
- * \brief Release the per-cell water vapour budget.
- */
-/*----------------------------------------------------------------------------*/
-
-void
-cs_lagr_sde_model_vapour_budget_finalize(void)
-{
-  CS_FREE(_vapour_budget);
-}
-
-/*----------------------------------------------------------------------------*/
-/*!
- * \brief Liquid water carried by the Lagrangian droplets, per unit volume.
+ * \brief Integrate mass and temperature of the humid air bulk droplets.
  *
- * \param[out]  m_l  liquid water concentration (kg/m^3), size n_cells
+ * Ported interface of upstream master. The bulk droplet microphysics
+ * machinery (vapour budget, bulk droplet partitioning) is not part of this
+ * fork, so activating it is a hard error rather than silently skipping.
+ *
+ * \param[in]  dt  time step (per cell)
  */
 /*----------------------------------------------------------------------------*/
 
 void
 cs_lagr_droplet_bulk_microphysics(const cs_real_t  dt)
 {
-  if (cs_glob_atmo_option->lagrangian_microphysics != 1)
-    return;
-  if (cs_glob_lagr_model->physical_model != CS_LAGR_PHYS_CTWR)
-    return;
+  CS_UNUSED(dt);
 
-  /* The Eulerian physical properties may be updated more than once in a
-     time step; the droplets must only be integrated once. */
-
-  static int _last_nt = -1;
-  const int nt_cur = cs_glob_time_step->nt_cur;
-  if (nt_cur == _last_nt)
-    return;
-  _last_nt = nt_cur;
-
-  cs_lagr_particle_set_t &p_set = cs_lagr_get_particle_set_ref();
-
-  /* Share of the condensable water of each cell, so that the droplets of a
-     cell cannot take up more water than the cell holds. */
-  cs_lagr_sde_model_vapour_budget_init();
-
-  for (cs_lnum_t p_id = 0; p_id < p_set.n_particles; p_id++) {
-
-    if (p_set.flag(p_id, CS_LAGR_PART_TO_DELETE))
-      continue;
-    if (p_set.attr_lnum(p_id, CS_LAGR_CELL_ID) < 0)
-      continue;
-
-    _sde_i_ct(p_set, p_id, dt, 1, true /* bulk droplets only */);
-  }
-
-  cs_lagr_sde_model_vapour_budget_finalize();
+  bft_error(__FILE__, __LINE__, 0,
+            "%s: lagrangian bulk droplet microphysics is not supported "
+            "in this version of the Lagrangian module\n"
+            "(set cs_glob_atmo_option->lagrangian_microphysics to 0).",
+            __func__);
 }
 
 /*----------------------------------------------------------------------------*/
 /*!
  * \brief Liquid water carried by the Lagrangian droplets, per unit volume.
  *
- * \param[out]  m_l  liquid water concentration (kg/m^3), size n_cells
+ * Without bulk microphysics support, no droplet is part of the humid air
+ * bulk, so the concentration is zero everywhere.
+ *
+ * \param[out]  m_l  liquid water concentration per cell (kg/m^3)
  */
 /*----------------------------------------------------------------------------*/
 
 void
 cs_lagr_droplet_liquid_concentration(cs_real_t  m_l[])
 {
-  const cs_mesh_t *m = cs_glob_mesh;
-  const cs_mesh_quantities_t *mq = cs_glob_mesh_quantities;
-  const cs_lnum_t n_cells = m->n_cells;
+  const cs_lnum_t n_cells = cs_glob_mesh->n_cells;
 
   for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++)
     m_l[c_id] = 0.;
-
-  if (cs_glob_lagr_model->physical_model != CS_LAGR_PHYS_CTWR)
-    return;
-
-  cs_lagr_particle_set_t &p_set = cs_lagr_get_particle_set_ref();
-
-  for (cs_lnum_t p_id = 0; p_id < p_set.n_particles; p_id++) {
-
-    const cs_lnum_t c_id = p_set.attr_lnum(p_id, CS_LAGR_CELL_ID);
-    if (c_id < 0 || c_id >= n_cells)
-      continue;
-
-    /* Only the plume condensate is part of the humid air bulk; the
-       cooling tower rain is a separate phase. */
-    if (!_is_bulk_droplet(p_set.attr_real(p_id, CS_LAGR_DIAMETER)))
-      continue;
-
-    m_l[c_id] +=   p_set.attr_real(p_id, CS_LAGR_STAT_WEIGHT)
-                 * p_set.attr_real(p_id, CS_LAGR_MASS);
-  }
-
-  for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
-    const cs_real_t vol = mq->cell_vol[c_id];
-    m_l[c_id] = (vol > 0.) ? m_l[c_id] / vol : 0.;
-  }
 }
-
-/*----------------------------------------------------------------------------*/

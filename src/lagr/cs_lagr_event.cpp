@@ -740,9 +740,7 @@ cs_lagr_event_init_from_particle(cs_lagr_event_set_t     *events,
   for (cs_lnum_t i = 0; i < _n_mapped_part_attr; i++) {
     auto attr = static_cast<cs_lagr_attribute_t>(_mapped_part_attr[i]);
 
-    const auto *p_attr = cs_lagr_particles_attr_get_const_ptr<unsigned char>(p_set,
-                                                                             p_id,
-                                                                             attr);
+    const auto *p_attr = p_set->attr_get_const_ptr<unsigned char>(p_id, attr);
 
     auto *e_attr = cs_lagr_events_attr_get_ptr<unsigned char>(events,
                                                               event_id,
@@ -754,8 +752,7 @@ cs_lagr_event_init_from_particle(cs_lagr_event_set_t     *events,
       e_attr[j] = p_attr[j];
   }
 
-  cs_lnum_t cell_id = cs_lagr_particles_get_lnum(p_set, p_id,
-                                                 CS_LAGR_CELL_ID);
+  cs_lnum_t cell_id = p_set->cell_id(p_id);
   cs_lagr_events_set_lnum(events,
                           event_id,
                           CS_LAGR_E_CELL_ID,

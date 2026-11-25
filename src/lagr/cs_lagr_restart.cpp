@@ -285,7 +285,7 @@ _init_particle_values(cs_lagr_particle_set_t  *particles,
       assert(datatype == CS_REAL_TYPE);
       assert(stride == 1);
       for (cs_lnum_t i = 0; i < n_particles; i++)
-        cs_lagr_particles_set_real(particles, i, attr, rand()/RAND_MAX);
+        particles->attr_real(i, attr) = (cs_real_t)rand() / RAND_MAX;
     }
     break;
 
@@ -308,10 +308,8 @@ _init_particle_values(cs_lagr_particle_set_t  *particles,
       /* initialize particle temperature with temperature seen */
       if (t != nullptr) {
         for (cs_lnum_t i = 0; i < n_particles; i++) {
-          cs_lnum_t cell_id
-            = cs_lagr_particles_get_lnum(particles, i, CS_LAGR_CELL_ID);
-          cs_real_t *part_val
-            = cs_lagr_particles_attr_n_get_ptr<cs_real_t>(particles, i, 0, attr);
+          cs_lnum_t cell_id = particles->cell_id(i);
+          cs_real_t *part_val = particles->attr_real_ptr(i, attr);
           for (cs_lnum_t j = 0; j < stride; j++)
             part_val[j] = t[cell_id] - c_kelvin;
         }
@@ -320,8 +318,7 @@ _init_particle_values(cs_lagr_particle_set_t  *particles,
       /* set to reference temperature */
       else {
         for (cs_lnum_t i = 0; i < n_particles; i++) {
-          cs_real_t *part_val
-            = cs_lagr_particles_attr_n_get_ptr<cs_real_t>(particles, i, 0, attr);
+          cs_real_t *part_val = particles->attr_real_ptr(i, attr);
           for (cs_lnum_t j = 0; j < stride; j++)
             part_val[j] = cs_glob_fluid_properties->t0 - c_kelvin;
         }
@@ -334,8 +331,7 @@ _init_particle_values(cs_lagr_particle_set_t  *particles,
     if (datatype == CS_LNUM_TYPE) {
       assert(stride == 1);
       for (cs_lnum_t i = 0; i < n_particles; i++) {
-        cs_lnum_t *dest =
-          cs_lagr_particles_attr_n_get_ptr<cs_lnum_t>(particles, i, 0, attr);
+        cs_lnum_t *dest = particles->attr_lnum_ptr(i, attr);
         for (cs_lnum_t j = 0; j < stride; j++)
           dest[j] = 0;
       }
@@ -343,16 +339,14 @@ _init_particle_values(cs_lagr_particle_set_t  *particles,
     else if (datatype == CS_GNUM_TYPE) {
       assert(stride == 1);
       for (cs_lnum_t i = 0; i < n_particles; i++) {
-        cs_gnum_t *dest =
-          cs_lagr_particles_attr_n_get_ptr<cs_gnum_t>(particles, i, 0, attr);
+        cs_gnum_t *dest = particles->attr_gnum_ptr(i, attr);
         for (cs_lnum_t j = 0; j < stride; j++)
           dest[j] = 0;
       }
     }
     else if (datatype == CS_REAL_TYPE) {
       for (cs_lnum_t i = 0; i < n_particles; i++) {
-        cs_real_t *dest =
-          cs_lagr_particles_attr_n_get_ptr<cs_real_t>(particles, i, 0, attr);
+        cs_real_t *dest = particles->attr_real_ptr(i, attr);
         for (cs_lnum_t j = 0; j < stride; j++)
           dest[j] = 0.;
       }
@@ -534,8 +528,7 @@ cs_lagr_restart_read_particle_data(cs_restart_t  *r)
           if (g_b_face_num != nullptr) {
             for (cs_lnum_t i = 0; i < p_set->n_particles; i++) {
               if (gnum_read[i] > 0) {
-                cs_lnum_t cell_id = cs_lagr_particles_get_lnum(p_set, i,
-                                                               CS_LAGR_CELL_ID);
+                cs_lnum_t cell_id = p_set->cell_id(i);
                 cs_lnum_t s_id = cell_b_faces_idx[cell_id];
                 cs_lnum_t e_id = cell_b_faces_idx[cell_id+1];
                 for (cs_lnum_t j = s_id; j < e_id; j++) {
@@ -550,8 +543,7 @@ cs_lagr_restart_read_particle_data(cs_restart_t  *r)
           else {
             for (cs_lnum_t i = 0; i < p_set->n_particles; i++) {
               if (gnum_read[i] > 0) {
-                cs_lnum_t cell_id = cs_lagr_particles_get_lnum(p_set, i,
-                                                               CS_LAGR_CELL_ID);
+                cs_lnum_t cell_id = p_set->cell_id(i);
                 cs_lnum_t s_id = cell_b_faces_idx[cell_id];
                 cs_lnum_t e_id = cell_b_faces_idx[cell_id+1];
                 for (cs_lnum_t j = s_id; j < e_id; j++) {

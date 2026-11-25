@@ -739,8 +739,7 @@ _check_particles(cs_lagr_particle_set_t         &p_set,
 
       if (p_set.p_am->count[1][attr] > 0) {
 
-        auto val
-          = cs_lagr_particles_attr_get_val<cs_real_t>(&p_set, p_id, attr);
+        cs_real_t val = p_set.attr_real(p_id, attr);
 
         if (val <= 0.0)
           bft_error(__FILE__, __LINE__, 0,
@@ -795,8 +794,7 @@ _check_particles(cs_lagr_particle_set_t         &p_set,
       for (int i_attr = 0; i_attr < 2; i_attr++) {
 
         auto attr = static_cast<cs_lagr_attribute_t>(r00_attrs[i_attr]);
-        cs_real_t val
-          = cs_lagr_particles_attr_get_val<cs_real_t>(&p_set, p_id, attr);
+        cs_real_t val = p_set.attr_real(p_id, attr);
 
         if (val < 0) {
           bft_error(__FILE__, __LINE__, 0,
@@ -1067,7 +1065,7 @@ cs_lagr_injection(int        time_id,
         for (cs_lnum_t p_id = particle_range[0];
              p_id < particle_range[1];
              p_id++)
-          cs_lagr_particles_attributes_fill_zero(&p_set, p_id);
+          p_set.attributes_fill_zero(p_id);
 
         /* Define particle coordinates and place on faces/cells */
 
@@ -1143,7 +1141,7 @@ cs_lagr_injection(int        time_id,
                p_id < p_set.n_particles;
                p_id++) {
 
-            cs_lagr_particles_current_to_previous(p_set, p_id);
+            p_set.current_to_previous(p_id);
 
             cs_lnum_t i = p_id + n_inject - p_set.n_particles;
 

@@ -52,6 +52,7 @@
 
 #include "base/cs_array.h"
 #include "base/cs_base.h"
+#include "base/cs_dispatch.h"
 #include "base/cs_math.h"
 #include "base/cs_mem.h"
 #include "base/cs_physical_constants.h"
@@ -61,7 +62,6 @@
 #include "mesh/cs_mesh_quantities.h"
 #include "turb/cs_turbulence_model.h"
 
-#include "atmo/cs_atmo.h"
 #include "lagr/cs_lagr.h"
 #include "lagr/cs_lagr_particle.h"
 
@@ -132,9 +132,12 @@ cs_lagr_coupling_initialize(void)
   bool is_time_averaged = (   cs_glob_lagr_time_scheme->isttio == 1
                            && lag_st->npts > 0);
 
-  /* Init particle volume and mass in cell */
-  CS_MALLOC_HD(volp, n_cells_ext, cs_real_t, cs_alloc_mode);
-  CS_MALLOC_HD(volm, n_cells_ext, cs_real_t, cs_alloc_mode);
+  /* Init particle volume and mass in cell.
+     Use separate host/device allocations (CS_ALLOC_HOST_DEVICE): the
+     particle scatter writes these on host, so a single explicit copy
+     per time step replaces per-page unified-memory migrations. */
+  CS_MALLOC_HD(volp, n_cells_ext, cs_real_t, CS_ALLOC_HOST_DEVICE);
+  CS_MALLOC_HD(volm, n_cells_ext, cs_real_t, CS_ALLOC_HOST_DEVICE);
   cs_array_real_fill_zero(n_cells_ext, volp);
   cs_array_real_fill_zero(n_cells_ext, volm);
 
@@ -142,8 +145,8 @@ cs_lagr_coupling_initialize(void)
     /* Momentum source terms
        ===================== */
     if (is_time_averaged) {
-      CS_MALLOC_HD(t_st_vel, n_cells_ext, cs_real_3_t, cs_alloc_mode);
-      CS_MALLOC_HD(t_st_imp_vel, n_cells_ext, cs_real_t, cs_alloc_mode);
+      CS_MALLOC_HD(t_st_vel, n_cells_ext, cs_real_3_t, CS_ALLOC_HOST_DEVICE);
+      CS_MALLOC_HD(t_st_imp_vel, n_cells_ext, cs_real_t, CS_ALLOC_HOST_DEVICE);
     }
     else {
       if (f_st_vel != nullptr)
@@ -165,14 +168,14 @@ cs_lagr_coupling_initialize(void)
          (difficult to write something for v2, which loses its meaning as
          "Rij component") */
       if (is_time_averaged)
-        CS_MALLOC_HD(t_st_k, n_cells_ext, cs_real_t, cs_alloc_mode);
+        CS_MALLOC_HD(t_st_k, n_cells_ext, cs_real_t, CS_ALLOC_HOST_DEVICE);
       else if (f_st_k != nullptr)
         t_st_k = f_st_k->val;
       cs_array_real_fill_zero(n_cells_ext, t_st_k);
     }
     else if (extra->itytur == 3) {
       if (is_time_averaged)
-        CS_MALLOC_HD(t_st_rij, n_cells_ext, cs_real_6_t, cs_alloc_mode);
+        CS_MALLOC_HD(t_st_rij, n_cells_ext, cs_real_6_t, CS_ALLOC_HOST_DEVICE);
       else if (f_st_rij != nullptr)
         t_st_rij = (cs_real_6_t*)(f_st_rij->val);
       cs_array_real_fill_zero(n_cells_ext * 6, (cs_real_t *)t_st_rij);
@@ -187,7 +190,7 @@ cs_lagr_coupling_initialize(void)
           || cs_glob_lagr_model->physical_model == CS_LAGR_PHYS_CTWR )) {
     if (t_st_p == nullptr) {
       if (is_time_averaged)
-        CS_MALLOC_HD(t_st_p, n_cells_ext, cs_real_t, cs_alloc_mode);
+        CS_MALLOC_HD(t_st_p, n_cells_ext, cs_real_t, CS_ALLOC_HOST_DEVICE);
       else if (f_st_p != nullptr)
         t_st_p = f_st_p->val;
     }
@@ -209,8 +212,8 @@ cs_lagr_coupling_initialize(void)
         || cs_glob_lagr_model->physical_model == CS_LAGR_PHYS_CTWR) {
 
       if (is_time_averaged) {
-        CS_MALLOC_HD(t_st_t_e, n_cells_ext, cs_real_t, cs_alloc_mode);
-        CS_MALLOC_HD(t_st_t_i, n_cells_ext, cs_real_t, cs_alloc_mode);
+        CS_MALLOC_HD(t_st_t_e, n_cells_ext, cs_real_t, CS_ALLOC_HOST_DEVICE);
+        CS_MALLOC_HD(t_st_t_i, n_cells_ext, cs_real_t, CS_ALLOC_HOST_DEVICE);
       }
       else {
         t_st_t_e = f_st_t_e->val;
@@ -225,7 +228,7 @@ cs_lagr_coupling_initialize(void)
   /* Evaporation source term (for species, when mass is disabled under CTWR) */
   if (f_st_evap != nullptr) {
     if (is_time_averaged)
-      CS_MALLOC_HD(t_st_evap, n_cells_ext, cs_real_t, cs_alloc_mode);
+      CS_MALLOC_HD(t_st_evap, n_cells_ext, cs_real_t, CS_ALLOC_HOST_DEVICE);
     else
       t_st_evap = f_st_evap->val;
     cs_array_real_fill_zero(n_cells_ext, t_st_evap);
@@ -389,20 +392,7 @@ cs_lagr_coupling_increment_part_contrib(cs_lagr_particle_set_t       &p_set,
   /* Mass source terms
      ================= */
 
-  /* A droplet of the humid air bulk carries water that is already part of
-     the transported total water, so its condensation is an internal
-     transfer and must not appear as a mass source term on the carrier
-     phase; counting it here would remove the same water twice. Only the
-     cooling tower rain, which is a separate phase, exchanges mass. */
-
-  const bool is_bulk_droplet
-    = (   cs_glob_atmo_option->lagrangian_microphysics == 1
-       && cs_glob_lagr_model->physical_model == CS_LAGR_PHYS_CTWR
-       && (  p_set.attr_real(p_id, CS_LAGR_DIAMETER)
-           <= cs_glob_atmo_option->bulk_droplet_d_max));
-
   if (    lag_st->has_twoway_mass == 1
-      && !is_bulk_droplet
       && (   cs_glob_lagr_specific_physics->solve_mass == 1
           || cs_glob_lagr_specific_physics->solve_diameter == 1
           || cs_glob_lagr_model->physical_model == CS_LAGR_PHYS_CTWR )) {
@@ -410,7 +400,7 @@ cs_lagr_coupling_increment_part_contrib(cs_lagr_particle_set_t       &p_set,
       t_st_p[c_id] += - p_stat_w * (p_mass - prev_p_mass) / dtp * dvol * rel_dt;
   }
 
-  if (t_st_evap != nullptr && !is_bulk_droplet) {
+  if (t_st_evap != nullptr) {
       t_st_evap[c_id] += - p_stat_w * (p_mass - prev_p_mass) / dtp * dvol * rel_dt;
   }
 
@@ -472,6 +462,22 @@ cs_lagr_coupling_finalize(void)
   bool is_time_averaged = (   cs_glob_lagr_time_scheme->isttio == 1
                            && lag_st->npts > 0);
 
+  cs_dispatch_context ctx;
+
+  /* Synchronize host-written source-term buffers to the device once per
+     time step (single explicit copies instead of unified-memory page
+     fault migrations). No-ops for shared-allocation (field) arrays. */
+
+  if (lag_st->t_st_vel     != nullptr) cs_sync_h2d(lag_st->t_st_vel);
+  if (lag_st->t_st_imp_vel != nullptr) cs_sync_h2d(lag_st->t_st_imp_vel);
+  if (lag_st->t_st_k       != nullptr) cs_sync_h2d(lag_st->t_st_k);
+  if (lag_st->t_st_rij     != nullptr) cs_sync_h2d(lag_st->t_st_rij);
+  if (lag_st->t_st_p       != nullptr) cs_sync_h2d(lag_st->t_st_p);
+  if (lag_st->t_st_t_e     != nullptr) cs_sync_h2d(lag_st->t_st_t_e);
+  if (lag_st->t_st_t_i     != nullptr) cs_sync_h2d(lag_st->t_st_t_i);
+  if (lag_st->t_st_evap    != nullptr) cs_sync_h2d(lag_st->t_st_evap);
+  cs_sync_h2d(lag_st->volp);
+
   /*Note: t_* stands for temporary array, used in case of time moments */
   cs_real_t    *t_st_p = lag_st->t_st_p;
   cs_real_3_t  *t_st_vel = lag_st->t_st_vel;
@@ -502,6 +508,10 @@ cs_lagr_coupling_finalize(void)
 
   if (cs_glob_lagr_source_terms->has_twoway_dyn == 1) {
     cs_real_3_t *vel = (cs_real_3_t *)extra->vel->val;
+    const cs_real_3_t *d_vel
+      = (const cs_real_3_t *)cs_get_device_ptr_const(vel);
+    const cs_real_3_t *d_t_st_vel
+      = (const cs_real_3_t *)cs_get_device_ptr_const(t_st_vel);
     if (extra->itytur == 2 || extra->itytur == 4 ||
         extra->itytur == 5 || extra->iturb == CS_TURB_K_OMEGA) {
 
@@ -509,21 +519,34 @@ cs_lagr_coupling_finalize(void)
          (difficult to write something for v2, which loses its meaning as
        "Rij component") */
 
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++)
-        t_st_k[c_id] -= cs_math_3_dot_product(vel[c_id], t_st_vel[c_id]);
+      cs_real_t *d_t_st_k = (cs_real_t *)cs_get_device_ptr(t_st_k);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+        d_t_st_k[c_id] -= cs_math_3_dot_product(d_vel[c_id], d_t_st_vel[c_id]);
+      });
+      ctx.wait();
     }
     else if (extra->itytur == 3) {
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
+      /* Local copies for the device lambda: static arrays _iv2t/_jv2t
+         are not accessible on device. */
+      const cs_lnum_t iv2t[6] = {0, 1, 2, 0, 1, 0};
+      const cs_lnum_t jv2t[6] = {0, 1, 2, 1, 2, 2};
+      cs_real_6_t *d_t_st_rij = (cs_real_6_t *)cs_get_device_ptr(t_st_rij);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
         for (cs_lnum_t ij = 0; ij < 6; ij++) {
-          cs_lnum_t i = _iv2t[ij];
-          cs_lnum_t j = _jv2t[ij];
+          cs_lnum_t i = iv2t[ij];
+          cs_lnum_t j = jv2t[ij];
 
-          t_st_rij[c_id][ij] -= ( vel[c_id][i] * t_st_vel[c_id][j]
-                                + vel[c_id][j] * t_st_vel[c_id][i]);
+          d_t_st_rij[c_id][ij] -= ( d_vel[c_id][i] * d_t_st_vel[c_id][j]
+                                  + d_vel[c_id][j] * d_t_st_vel[c_id][i]);
         }
-      }
+      });
+      ctx.wait();
     }
   }
+
+  /* Scalar checks on host: volp/volm are valid host buffers, cell_vol
+     and cromf->val are shared read-mostly arrays. */
+
   for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
 
     cs_real_t mf   = cell_vol[c_id] * extra->cromf->val[c_id];
@@ -533,31 +556,68 @@ cs_lagr_coupling_finalize(void)
     if (tauv > tvmax) {
       lag_st->ntxerr++;
       cs_glob_lagr_source_terms->ntxerr++;;
-
-      if (t_st_vel != nullptr) {
-        for (cs_lnum_t j = 0; j < 3; j++)
-          t_st_vel[c_id][j] = 0.0;
-      }
-
-      if (t_st_imp_vel != nullptr)
-        t_st_imp_vel[c_id] = 0.0;
-
-      if (t_st_k != nullptr)
-        t_st_k[c_id] = 0.0;
-
-      if (t_st_rij != nullptr) {
-        for (cs_lnum_t j = 0; j < 6; j++)
-          t_st_rij[c_id][j] = 0.0;
-      }
-
-      if (t_st_t_e != nullptr)
-        t_st_t_e[c_id] = 0.0;
-
-      if (t_st_t_i != nullptr)
-        t_st_t_i[c_id] = 0.0;
     }
     lag_st->vmax = cs::max(tauv, lag_st->vmax);
     lag_st->tmamax = cs::max(taum, lag_st->tmamax);
+  }
+
+  /* Zero source terms of cells exceeding the allowed volume fraction
+     on device (uses the device copies synchronized above). */
+
+  {
+    const cs_real_t *d_volp
+      = (const cs_real_t *)cs_get_device_ptr_const(volp);
+    const cs_real_t *d_cell_vol
+      = (const cs_real_t *)cs_get_device_ptr_const(cell_vol);
+
+    cs_real_3_t *d_t_st_vel
+      = (t_st_vel != nullptr) ? (cs_real_3_t *)cs_get_device_ptr(t_st_vel)
+                              : nullptr;
+    cs_real_t *d_t_st_imp_vel
+      = (t_st_imp_vel != nullptr) ? (cs_real_t *)cs_get_device_ptr(t_st_imp_vel)
+                                  : nullptr;
+    cs_real_t *d_t_st_k
+      = (t_st_k != nullptr) ? (cs_real_t *)cs_get_device_ptr(t_st_k)
+                            : nullptr;
+    cs_real_6_t *d_t_st_rij
+      = (t_st_rij != nullptr) ? (cs_real_6_t *)cs_get_device_ptr(t_st_rij)
+                              : nullptr;
+    cs_real_t *d_t_st_t_e
+      = (t_st_t_e != nullptr) ? (cs_real_t *)cs_get_device_ptr(t_st_t_e)
+                              : nullptr;
+    cs_real_t *d_t_st_t_i
+      = (t_st_t_i != nullptr) ? (cs_real_t *)cs_get_device_ptr(t_st_t_i)
+                              : nullptr;
+
+    ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+      cs_real_t tauv = d_volp[c_id] / d_cell_vol[c_id];
+
+      if (tauv > tvmax) {
+
+        if (d_t_st_vel != nullptr) {
+          for (cs_lnum_t j = 0; j < 3; j++)
+            d_t_st_vel[c_id][j] = 0.0;
+        }
+
+        if (d_t_st_imp_vel != nullptr)
+          d_t_st_imp_vel[c_id] = 0.0;
+
+        if (d_t_st_k != nullptr)
+          d_t_st_k[c_id] = 0.0;
+
+        if (d_t_st_rij != nullptr) {
+          for (cs_lnum_t j = 0; j < 6; j++)
+            d_t_st_rij[c_id][j] = 0.0;
+        }
+
+        if (d_t_st_t_e != nullptr)
+          d_t_st_t_e[c_id] = 0.0;
+
+        if (d_t_st_t_i != nullptr)
+          d_t_st_t_i[c_id] = 0.0;
+      }
+    });
+    ctx.wait();
   }
 
   /* Time average of source terms
@@ -573,6 +633,9 @@ cs_lagr_coupling_finalize(void)
   cs_real_t   *st_evap    =  nullptr;
 
   if (is_time_averaged) {
+    /* Host copy for device lambdas (lag_st is a host struct). */
+    const cs_real_t npts = lag_st->npts;
+
     cs_field_t *f_st_p = cs_field_try("lagr_st_pressure");
     cs_field_t *f_st_vel = cs_field_try("lagr_st_velocity");
     cs_field_t *f_st_imp_vel = cs_field_try("lagr_st_imp_velocity");
@@ -584,100 +647,144 @@ cs_lagr_coupling_finalize(void)
 
     if (f_st_p != nullptr) {
       st_p = f_st_p->val;
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
-        st_p[c_id]
-          = (t_st_p[c_id] + (lag_st->npts - 1.0) * st_p[c_id])
-          / lag_st->npts;
-      }
+      cs_real_t *d_st_p = (cs_real_t *)cs_get_device_ptr(st_p);
+      const cs_real_t *d_t_st_p
+        = (const cs_real_t *)cs_get_device_ptr_const(t_st_p);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+        d_st_p[c_id]
+          = (d_t_st_p[c_id] + (npts - 1.0) * d_st_p[c_id])
+          / npts;
+      });
+      ctx.wait();
 
       /* Save TIME AVERAGED thermal power of rain if needed for post-processing */
       cs_field_t *f_evap_rate_rain = cs_field_try("evaporation_rate_rain");
       if (f_evap_rate_rain != nullptr) {
-        for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++)
-          f_evap_rate_rain->val[c_id] = st_p[c_id];
+        cs_real_t *evap_rate_rain
+          = (cs_real_t *)cs_get_device_ptr(f_evap_rate_rain->val);
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+          evap_rate_rain[c_id] = d_st_p[c_id];
+        });
+        ctx.wait();
       }
 
     }
 
     if (f_st_vel != nullptr) {
       st_vel = (cs_real_3_t*)(f_st_vel->val);
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
+      cs_real_3_t *d_st_vel = (cs_real_3_t *)cs_get_device_ptr(st_vel);
+      const cs_real_3_t *d_t_st_vel
+        = (const cs_real_3_t *)cs_get_device_ptr_const(t_st_vel);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
         for (cs_lnum_t j = 0; j < 3; j++) {
-          st_vel[c_id][j]
-            =    (t_st_vel[c_id][j] + (lag_st->npts - 1.0) * st_vel[c_id][j])
-               / lag_st->npts;
+          d_st_vel[c_id][j]
+            =    (d_t_st_vel[c_id][j] + (npts - 1.0) * d_st_vel[c_id][j])
+               / npts;
         }
-      }
+      });
+      ctx.wait();
     }
 
     if (f_st_imp_vel != nullptr) {
       st_imp_vel = f_st_imp_vel->val;
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
-        st_imp_vel[c_id]
-          = (t_st_imp_vel[c_id] + (lag_st->npts - 1.0) * st_imp_vel[c_id])
-          / lag_st->npts;
-      }
+      cs_real_t *d_st_imp_vel = (cs_real_t *)cs_get_device_ptr(st_imp_vel);
+      const cs_real_t *d_t_st_imp_vel
+        = (const cs_real_t *)cs_get_device_ptr_const(t_st_imp_vel);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+        d_st_imp_vel[c_id]
+          = (d_t_st_imp_vel[c_id] + (npts - 1.0) * d_st_imp_vel[c_id])
+          / npts;
+      });
+      ctx.wait();
     }
 
     if (f_st_k != nullptr) {
       st_k = f_st_k->val;
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
-        st_k[c_id]
-          = (t_st_k[c_id] + (lag_st->npts - 1.0) * st_k[c_id])
-          / lag_st->npts;
-      }
+      cs_real_t *d_st_k = (cs_real_t *)cs_get_device_ptr(st_k);
+      const cs_real_t *d_t_st_k
+        = (const cs_real_t *)cs_get_device_ptr_const(t_st_k);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+        d_st_k[c_id]
+          = (d_t_st_k[c_id] + (npts - 1.0) * d_st_k[c_id])
+          / npts;
+      });
+      ctx.wait();
     }
 
     if (f_st_rij != nullptr) {
       st_rij = (cs_real_6_t*)f_st_rij->val;
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
+      cs_real_6_t *d_st_rij = (cs_real_6_t *)cs_get_device_ptr(st_rij);
+      const cs_real_6_t *d_t_st_rij
+        = (const cs_real_6_t *)cs_get_device_ptr_const(t_st_rij);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
         for (cs_lnum_t j = 0; j < 6; j++) {
-          st_rij[c_id][j]
-            =    (t_st_rij[c_id][j] + (lag_st->npts - 1.0) * st_rij[c_id][j])
-               / lag_st->npts;
+          d_st_rij[c_id][j]
+            =    (d_t_st_rij[c_id][j] + (npts - 1.0) * d_st_rij[c_id][j])
+               / npts;
         }
-      }
+      });
+      ctx.wait();
     }
 
     if (f_st_t_e != nullptr) {
       st_t_e = f_st_t_e->val;
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
-        st_t_e[c_id]
-          = (t_st_t_e[c_id] + (lag_st->npts - 1.0) * st_t_e[c_id])
-          / lag_st->npts;
-      }
+      cs_real_t *d_st_t_e = (cs_real_t *)cs_get_device_ptr(st_t_e);
+      const cs_real_t *d_t_st_t_e
+        = (const cs_real_t *)cs_get_device_ptr_const(t_st_t_e);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+        d_st_t_e[c_id]
+          = (d_t_st_t_e[c_id] + (npts - 1.0) * d_st_t_e[c_id])
+          / npts;
+      });
+      ctx.wait();
 
       /* Save TIME AVERAGED thermal power of rain if needed for post-processing */
       cs_field_t *f_th_power_rain = cs_field_try("thermal_power_rain");
       if (f_th_power_rain != nullptr) {
-        for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++)
-          f_th_power_rain->val[c_id] = st_t_e[c_id];
+        cs_real_t *th_power_rain
+          = (cs_real_t *)cs_get_device_ptr(f_th_power_rain->val);
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+          th_power_rain[c_id] = d_st_t_e[c_id];
+        });
+        ctx.wait();
       }
     }
 
     if (f_st_evap != nullptr) {
       st_evap = f_st_evap->val;
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
-        st_evap[c_id]
-          = (t_st_evap[c_id] + (lag_st->npts - 1.0) * st_evap[c_id])
-          / lag_st->npts;
-      }
+      cs_real_t *d_st_evap = (cs_real_t *)cs_get_device_ptr(st_evap);
+      const cs_real_t *d_t_st_evap
+        = (const cs_real_t *)cs_get_device_ptr_const(t_st_evap);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+        d_st_evap[c_id]
+          = (d_t_st_evap[c_id] + (npts - 1.0) * d_st_evap[c_id])
+          / npts;
+      });
+      ctx.wait();
 
       /* Save TIME AVERAGED evaporation rate of rain if needed for post-processing */
       cs_field_t *f_evap_rate_rain = cs_field_try("evaporation_rate_rain");
       if (f_evap_rate_rain != nullptr) {
-        for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++)
-          f_evap_rate_rain->val[c_id] = st_evap[c_id];
+        cs_real_t *evap_rate_rain
+          = (cs_real_t *)cs_get_device_ptr(f_evap_rate_rain->val);
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+          evap_rate_rain[c_id] = d_st_evap[c_id];
+        });
+        ctx.wait();
       }
     }
 
     if (f_st_t_i != nullptr) {
       st_t_i = f_st_t_i->val;
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++) {
-        st_t_i[c_id]
-          = (t_st_t_i[c_id] + (lag_st->npts - 1.0) * st_t_i[c_id])
-          / lag_st->npts;
-      }
+      cs_real_t *d_st_t_i = (cs_real_t *)cs_get_device_ptr(st_t_i);
+      const cs_real_t *d_t_st_t_i
+        = (const cs_real_t *)cs_get_device_ptr_const(t_st_t_i);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+        d_st_t_i[c_id]
+          = (d_t_st_t_i[c_id] + (npts - 1.0) * d_st_t_i[c_id])
+          / npts;
+      });
+      ctx.wait();
     }
 
     if (t_st_p != st_p)
@@ -710,20 +817,36 @@ cs_lagr_coupling_finalize(void)
     /* Save thermal power of rain if needed for post-processing */
     cs_field_t *f_th_power_rain = cs_field_try("thermal_power_rain");
     if (f_th_power_rain != nullptr && t_st_t_e != nullptr) {
-      for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++)
-        f_th_power_rain->val[c_id] = t_st_t_e[c_id];
+      cs_real_t *th_power_rain
+        = (cs_real_t *)cs_get_device_ptr(f_th_power_rain->val);
+      const cs_real_t *d_t_st_t_e
+        = (const cs_real_t *)cs_get_device_ptr_const(t_st_t_e);
+      ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+        th_power_rain[c_id] = d_t_st_t_e[c_id];
+      });
+      ctx.wait();
     }
 
     /* Save evaporation rate of rain if needed for post-processing */
     cs_field_t *f_evap_rate_rain = cs_field_try("evaporation_rate_rain");
     if (f_evap_rate_rain != nullptr) {
+      cs_real_t *evap_rate_rain
+        = (cs_real_t *)cs_get_device_ptr(f_evap_rate_rain->val);
       if (t_st_p != nullptr) {
-        for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++)
-          f_evap_rate_rain->val[c_id] = t_st_p[c_id];
+        const cs_real_t *d_t_st_p
+          = (const cs_real_t *)cs_get_device_ptr_const(t_st_p);
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+          evap_rate_rain[c_id] = d_t_st_p[c_id];
+        });
+        ctx.wait();
       }
       else if (t_st_evap != nullptr) {
-        for (cs_lnum_t c_id = 0; c_id < n_cells; c_id++)
-          f_evap_rate_rain->val[c_id] = t_st_evap[c_id];
+        const cs_real_t *d_t_st_evap
+          = (const cs_real_t *)cs_get_device_ptr_const(t_st_evap);
+        ctx.parallel_for(n_cells, [=] CS_F_HOST_DEVICE (cs_lnum_t c_id) {
+          evap_rate_rain[c_id] = d_t_st_evap[c_id];
+        });
+        ctx.wait();
       }
     }
 

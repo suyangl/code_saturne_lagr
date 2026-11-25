@@ -41,6 +41,7 @@
 
 #include "base/cs_base.h"
 #include "base/cs_field.h"
+#include "base/cs_mdspan.h"
 
 #include "lagr/cs_lagr_injection.h"
 
@@ -1173,6 +1174,96 @@ typedef struct {
 
 } cs_lagr_extra_module_t;
 
+/* Carrier Eulerian fields and parameters view for GPU/Host loops */
+
+#if defined(__cplusplus)
+
+namespace cs::lagr {
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Carrier Eulerian fields and parameters view using mdspan for GPU/Host
+ */
+/*----------------------------------------------------------------------------*/
+
+struct carrier_view {
+
+  /* Fluid velocity (carrier 3D vector: vel(c_id, 0..2)) */
+  cs_span_2d<cs_real_t>  vel;
+
+  /* Pressure and density */
+  cs_span<cs_real_t>     pressure;
+  cs_span<cs_real_t>     rho_f;
+  cs_real_t              rho0;
+
+  /* Molecular dynamic viscosity and specific heat */
+  cs_span<cs_real_t>     mu_l;
+  cs_real_t              mu0;
+  cs_span<cs_real_t>     cp;
+  cs_real_t              cp0;
+
+  /* Temperature and thermal properties */
+  cs_span<cs_real_t>     temperature;
+  cs_span<cs_real_t>     temp_var;
+  cs_span_2d<cs_real_t>  temp_turb_flux;
+  cs_span<cs_real_t>     lambda_f;
+  cs_real_t              lambda0;
+
+  /* Turbulence quantities */
+  cs_span<cs_real_t>     k;
+  cs_span<cs_real_t>     ep;
+  cs_span<cs_real_t>     omg;
+  cs_span_2d<cs_real_t>  rij;
+  cs_span_2d<cs_real_t>  grad_k;
+
+  /* Gradients */
+  cs_span_2d<cs_real_t>  grad_p;
+  cs_span_3d<cs_real_t>  grad_vel;
+  cs_span_2d<cs_real_t>  grad_temp_f;
+
+  /* Boundary layer fields */
+  cs_span<cs_real_t>     ustar;
+  cs_span<cs_real_t>     tstar;
+
+  /* Two-phase fraction */
+  cs_span<cs_real_t>     alpha;
+
+  /* Velocity bounds */
+  cs_real_3_t            vel_min;
+  cs_real_3_t            vel_max;
+  cs_span_2d<cs_real_t>  cell_vel_min;
+  cs_span_2d<cs_real_t>  cell_vel_max;
+
+  /* Continuous phase and time identifiers */
+  int                    phase_id;
+  int                    time_id;
+
+  /* Scalar parameters */
+  int                    turb_model;
+  int                    n_phases;
+  int                    radiative_model;
+
+};
+
+/* Maximum continuous phases supported in fixed-size carrier bundle */
+#define CS_LAGR_MAX_CARRIER_PHASES 4
+
+/* Carrier bundle view for multiphase continuous carrier flows */
+
+struct carrier_bundle_view {
+
+  int           n_phases;
+  carrier_view  phase[CS_LAGR_MAX_CARRIER_PHASES];
+
+};
+
+} // namespace cs::lagr
+
+typedef cs::lagr::carrier_view cs_lagr_carrier_view_t;
+typedef cs::lagr::carrier_bundle_view cs_lagr_carrier_bundle_view_t;
+
+#endif
+
 /*============================================================================
  * Global variables
  *============================================================================*/
@@ -1472,6 +1563,43 @@ cs_get_lagr_boundary_interactions(void);
 cs_lagr_extra_module_t *
 cs_get_lagr_extra_module(void);
 
+#if defined(__cplusplus)
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Build a POD carrier view with device-accessible raw pointers from
+ *        the extra module structure for a specific continuous phase and time.
+ *
+ * \param[in]  extra     pointer to extra module structure (or array)
+ * \param[in]  phase_id  continuous phase id (default: 0)
+ * \param[in]  time_id   time index (0: current, 1: previous, default: 0)
+ *
+ * \return carrier view POD structure
+ */
+/*----------------------------------------------------------------------------*/
+
+cs_lagr_carrier_view_t
+cs_lagr_get_carrier_view(const cs_lagr_extra_module_t *extra,
+                         int                           phase_id = 0,
+                         int                           time_id = 0);
+
+/*----------------------------------------------------------------------------*/
+/*!
+ * \brief Build a POD carrier bundle view containing all continuous phases.
+ *
+ * \param[in]  extra     pointer to extra module array
+ * \param[in]  time_id   time index (0: current, 1: previous, default: 0)
+ *
+ * \return carrier bundle view POD structure
+ */
+/*----------------------------------------------------------------------------*/
+
+cs_lagr_carrier_bundle_view_t
+cs_lagr_get_carrier_bundle_view(const cs_lagr_extra_module_t *extra,
+                                int                           time_id = 0);
+
+#endif
+
 /*----------------------------------------------------------------------------
  * Prepare for execution of the Lagrangian model.
  *
@@ -1531,20 +1659,13 @@ cs_lagr_solve_time_step(const int         itypfb[],
                         const cs_real_t  *dt);
 
 /*----------------------------------------------------------------------------*/
+
+
+/*----------------------------------------------------------------------------*/
 /*!
- * \brief Integrate mass and temperature of the humid air bulk droplets.
+ * rief Integrate mass and temperature of the humid air bulk droplets.
  *
- * With the Lagrangian cloud microphysics, the plume condensate belongs to
- * the humid air bulk: its water is part of the transported total water, so
- * its condensation is an internal transfer and must be integrated together
- * with the Eulerian microphysics, at the point where the liquid water
- * content is built, rather than during the Lagrangian tracking. The cooling
- * tower rain is a separate phase and stays on the tracking path.
- *
- * Integrates at most once per time step, the Eulerian physical properties
- * being possibly updated several times.
- *
- * \param[in]  dt  time step
+ * \param[in]  dt  time step (per cell)
  */
 /*----------------------------------------------------------------------------*/
 
@@ -1553,19 +1674,9 @@ cs_lagr_droplet_bulk_microphysics(const cs_real_t  dt);
 
 /*----------------------------------------------------------------------------*/
 /*!
- * \brief Liquid water carried by the Lagrangian droplets, per unit volume.
+ * rief Liquid water carried by the Lagrangian droplets, per unit volume.
  *
- * Computes, for every cell,
- * \f[ \frac{1}{V_c} \sum_{p \in c} w_p m_p \f]
- * in kg/m^3, the instantaneous liquid water concentration of the droplet
- * population. Dividing by the humid air density gives the liquid water mass
- * fraction \f$ q_l^{Lag} \f$ of the cell.
- *
- * This is deliberately a direct sum over the particle set rather than the
- * "particle_volume_fraction" statistic, which may be a time average: the
- * thermodynamic coupling needs the instantaneous value.
- *
- * \param[out]  m_l  liquid water concentration, size n_cells
+ * \param[out]  m_l  liquid water concentration per cell (kg/m^3)
  */
 /*----------------------------------------------------------------------------*/
 
